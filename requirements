@@ -1,0 +1,6 @@
+python-telegram-bot==21.6
+requests
+beautifulsoup4
+apscheduler==3.10.4
+pytz
+deep_translator
