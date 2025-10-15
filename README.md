@@ -1,2 +1,2 @@
 # manasyemek
-menu checker for KTMU student
+menu checker for KTMU students
