@@ -1,143 +1,112 @@
-# bot.py — Conflict-safe (retry) with /yemek, /quote, -sms
-import os, sys, logging, re, time, asyncio
-from collections import OrderedDict
-from datetime import datetime, timedelta
-from urllib.parse import urljoin
-from io import BytesIO
-
+import os
+import re
+import time
+import asyncio
 import requests
+from io import BytesIO
+from datetime import datetime, timedelta
+from collections import OrderedDict
 from bs4 import BeautifulSoup
-from bs4.element import Tag
-from pytz import timezone as pytz_timezone
-from deep_translator import GoogleTranslator
+from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw, ImageFont
 
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, BotCommand
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.constants import ParseMode
-from telegram.error import Conflict
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes,
-    JobQueue, MessageHandler, filters
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 )
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-VERSION = "v4.1-retry-on-conflict"
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("manas_menu_bot")
-log.info("Starting bot version %s", VERSION)
+BOT_TOKEN = os.getenv("7681582309:AAF8Zv0nNkV50LviL0gU1pusj8egDbE9_mw")
+MENU_URL = "https://beslenme.manas.edu.kg/menu"
+TZ = ZoneInfo("Asia/Bishkek")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "7681582309:AAF8Zv0nNkV50LviL0gU1pusj8egDbE9_mw"
-BASE_URL = "https://beslenme.manas.edu.kg"
-MENU_URL = f"{BASE_URL}/menu"
-BISHKEK_TZ = pytz_timezone("Asia/Bishkek")
+DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}\s+\S+", re.UNICODE)
+_cache = {"ts": 0, "html": None, "menu": None}
 
-TXT = {
-    "welcome": "Добро пожаловать! 👋\nВыберите, какое меню показать:",
-    "today": "🍽️ Сегодня",
-    "tomorrow": "🍱 Завтра",
-    "dayafter": "🥘 Послезавтра",
-    "week": "📅 Неделя",
-    "no_today": "Меню на сегодня не найдено.",
-    "no_tomorrow": "Меню на завтра не найдено.",
-    "no_dayafter": "Меню на послезавтра не найдено.",
-    "no_week": "Недельное меню не найдено.",
-    "weekly_header": "📅 Меню на неделю (фото блюд ниже)",
-    "could_not_load": "❌ Не удалось загрузить меню. Попробуйте позже.",
-    "kcal": "ккал",
-}
-
-CACHE_TTL = 600
-_cache = {"ts": 0.0, "parsed": None, "raw": None}
-DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}\s+\S+", re.U)
-
-def tr(text: str) -> str:
-    try:
-        return GoogleTranslator(source="auto", target="ru").translate(text)
-    except Exception:
-        return text
-
-def fetch_menu_html() -> str:
-    if time.time() - _cache["ts"] < CACHE_TTL and _cache["raw"]:
-        return _cache["raw"]
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; MenuBot/4.1)"}
-    r = requests.get(MENU_URL, headers=headers, timeout=15)
+# ========== MENU SCRAPER ==========
+def fetch_menu_html():
+    if time.time() - _cache["ts"] < 600 and _cache["html"]:
+        return _cache["html"]
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MenuBot/1.0)"}
+    r = requests.get(MENU_URL, headers=headers, timeout=20)
     r.raise_for_status()
-    _cache["raw"] = r.text
-    _cache["parsed"] = None
     _cache["ts"] = time.time()
+    _cache["html"] = r.text
+    _cache["menu"] = None
     return r.text
 
 def parse_menu(html: str):
-    if _cache["parsed"] is not None and _cache["raw"] == html:
-        return _cache["parsed"]
+    if _cache["menu"] is not None:
+        return _cache["menu"]
     soup = BeautifulSoup(html, "html.parser")
     result = OrderedDict()
     heads = soup.select("div.mbr-section-head")
     for head in heads:
         h5 = head.find("h5")
-        if not isinstance(h5, Tag):
+        if not h5:
             continue
-        date_text = h5.get_text(" ", strip=True)
+        date_text = h5.get_text(strip=True)
         if not DATE_RE.match(date_text):
             continue
-        row = head.find_next_sibling(lambda x: isinstance(x, Tag) and x.name == "div" and "row" in x.get("class", []))
+        row = head.find_next_sibling(lambda x: x.name == "div" and "row" in x.get("class", []))
         if not row:
             continue
         items = []
         for card in row.select("div.item.features-image"):
             img_tag = card.select_one(".item-img img")
             img_url = None
-            if isinstance(img_tag, Tag):
+            if img_tag:
                 src = img_tag.get("src") or img_tag.get("data-src") or ""
-                img_url = urljoin(BASE_URL, src)
+                img_url = "https://beslenme.manas.edu.kg" + src
             title_tag = (card.select_one(".item-content h5 a strong")
                          or card.select_one(".item-content h5 strong")
                          or card.select_one(".item-content h5"))
-            name = title_tag.get_text(" ", strip=True) if isinstance(title_tag, Tag) else None
+            name = title_tag.get_text(strip=True) if title_tag else None
             kcal = None
             kcal_tag = card.select_one(".item-content h6")
-            if isinstance(kcal_tag, Tag):
+            if kcal_tag:
                 m = re.search(r"Kalori:\s*(\d+)", kcal_tag.get_text(" ", strip=True))
                 if m:
                     kcal = m.group(1)
             if name:
-                items.append({"name": name, "name_ru": tr(name), "kcal": kcal, "img": img_url})
+                items.append({"name": name, "kcal": kcal, "img": img_url})
         if items:
             result[date_text] = items
-    _cache["parsed"] = result
+    _cache["menu"] = result
     return result
 
-def format_day(date_key: str, dishes: list[dict]) -> str:
+def format_day(date_key, dishes):
     lines = [f"*{date_key}*"]
     for d in dishes:
-        nm = d["name_ru"] or d["name"]
         if d["kcal"]:
-            lines.append(f"• {nm} — _{d['kcal']} {TXT['kcal']}_")
+            lines.append(f"• {d['name']} — _{d['kcal']} kcal_")
         else:
-            lines.append(f"• {nm}")
+            lines.append(f"• {d['name']}")
     return "\n".join(lines)
 
-def get_for_date(menu, dt: datetime):
+def get_by_date_key(menu, dt):
     target = dt.strftime("%d.%m.%Y")
     for k, v in menu.items():
         if k.startswith(target):
             return k, v
     return None, None
 
-from telegram import InputMediaPhoto
-def media_group_for(dishes: list[dict]):
+def media_group_for(dishes):
     return [InputMediaPhoto(media=d["img"]) for d in dishes if d.get("img")]
+
+# ========== COMMANDS ==========
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Merhaba! Menüyü görmek için /yemek yazabilirsin veya bir mesajı alıntılamak için /quote kullanabilirsin.")
 
 async def yemek(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
-        [InlineKeyboardButton(TXT["today"], callback_data="today")],
-        [InlineKeyboardButton(TXT["tomorrow"], callback_data="tomorrow")],
-        [InlineKeyboardButton(TXT["dayafter"], callback_data="dayafter")],
-        [InlineKeyboardButton(TXT["week"], callback_data="week")],
+        [InlineKeyboardButton("🍽️ Bugün", callback_data="today")],
+        [InlineKeyboardButton("🍱 Yarın", callback_data="tomorrow")],
+        [InlineKeyboardButton("🥘 Ertesi Gün", callback_data="after")],
+        [InlineKeyboardButton("📅 Haftalık", callback_data="week")]
     ]
-    await update.message.reply_text(TXT["welcome"], reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text("Menüyü görmek istediğiniz zamanı seçin:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -146,14 +115,15 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         html = fetch_menu_html()
         menu = parse_menu(html)
     except Exception:
-        await q.edit_message_text(TXT["could_not_load"])
+        await q.edit_message_text("❌ Menü yüklenemedi. Lütfen tekrar deneyin.")
         return
-    now = datetime.now(BISHKEK_TZ)
+
+    now = datetime.now(TZ)
     choice = q.data
 
-    async def send_day(k, v, no_text_key):
+    async def send_day(k, v, none_msg):
         if not k:
-            await q.edit_message_text(TXT[no_text_key])
+            await q.edit_message_text(none_msg)
             return
         await q.edit_message_text(format_day(k, v), parse_mode=ParseMode.MARKDOWN)
         media = media_group_for(v)
@@ -161,59 +131,69 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_media_group(chat_id=q.message.chat_id, media=media[i:i+10])
 
     if choice == "today":
-        k, v = get_for_date(menu, now);      await send_day(k, v, "no_today")
+        k, v = get_by_date_key(menu, now)
+        await send_day(k, v, "Bugün için menü bulunamadı.")
     elif choice == "tomorrow":
-        k, v = get_for_date(menu, now + timedelta(days=1));  await send_day(k, v, "no_tomorrow")
-    elif choice == "dayafter":
-        k, v = get_for_date(menu, now + timedelta(days=2));  await send_day(k, v, "no_dayafter")
+        k, v = get_by_date_key(menu, now + timedelta(days=1))
+        await send_day(k, v, "Yarın için menü bulunamadı.")
+    elif choice == "after":
+        k, v = get_by_date_key(menu, now + timedelta(days=2))
+        await send_day(k, v, "Ertesi gün için menü bulunamadı.")
     elif choice == "week":
         if not menu:
-            await q.edit_message_text(TXT["no_week"]);  return
-        await q.edit_message_text(TXT["weekly_header"])
+            await q.edit_message_text("Haftalık menü bulunamadı.")
+            return
+        await q.edit_message_text("📅 Haftalık Menü")
         for date_key, dishes in menu.items():
             await context.bot.send_message(chat_id=q.message.chat_id, text=format_day(date_key, dishes), parse_mode=ParseMode.MARKDOWN)
             media = media_group_for(dishes)
             for i in range(0, len(media), 10):
                 await context.bot.send_media_group(chat_id=q.message.chat_id, media=media[i:i+10])
 
-SMS_REGEX = re.compile(r"^-sms\s*(\d{1,3})$", re.IGNORECASE)
-async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message; chat = update.effective_chat
-    text = (msg.text or msg.caption or "").strip()
-    m = SMS_REGEX.match(text)
-    if not m: return
-    n = max(1, min(int(m.group(1)), 300))
-    if chat.type in ("group", "supergroup"):
-        me = await context.bot.get_chat_member(chat.id, context.bot.id)
-        if not (me.status in ("administrator", "creator") and getattr(me, "can_delete_messages", True)):
-            await msg.reply_text("Мне нужны права «Удалять сообщения» в этом чате.");  return
-    else:
-        await msg.reply_text("В личном чате я могу удалять только свои сообщения.")
-    start_id = msg.message_id; deleted = 0; skipped = 0
-    for i in range(1, n + 1):
-        mid = start_id - i
-        if mid <= 0: break
-        try:
-            await context.bot.delete_message(chat_id=chat.id, message_id=mid)
-            deleted += 1; await asyncio.sleep(0.03)
-        except Exception:
-            skipped += 1; await asyncio.sleep(0.01)
-    try: await context.bot.delete_message(chat_id=chat.id, message_id=start_id)
-    except Exception: pass
-    note = await context.bot.send_message(chat.id, f"🧹 Удалено: {deleted} • Пропущено: {skipped}")
-    await asyncio.sleep(2); await note.delete()
+# ========== SMS PURGE ==========
 
-# ---- /quote
+SMS_RE = re.compile(r"^-sms\s*(\d{1,3})$", re.IGNORECASE)
+
+async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    chat = update.effective_chat
+    text = (msg.text or msg.caption or "").strip()
+    m = SMS_RE.match(text)
+    if not m:
+        return
+    n = max(1, min(int(m.group(1)), 300))
+    me = await context.bot.get_chat_member(chat.id, context.bot.id)
+    if not (me.status in ("administrator", "creator") and getattr(me, "can_delete_messages", True)):
+        await msg.reply_text("❌ Mesajları silebilmem için yönetici olmam gerekiyor.")
+        return
+    start_id = msg.message_id
+    deleted = 0
+    for i in range(1, n + 1):
+        try:
+            await context.bot.delete_message(chat_id=chat.id, message_id=start_id - i)
+            deleted += 1
+            await asyncio.sleep(0.03)
+        except Exception:
+            continue
+    await msg.reply_text(f"🧹 {deleted} mesaj silindi.")
+
+# ========== QUOTE ==========
+
 async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
-        await update.message.reply_text("📌 Используй /quote как ответ на сообщение.");  return
+        await update.message.reply_text("📌 Bir mesaja yanıt vererek /quote komutunu kullanın.")
+        return
+
     reply_msg = update.message.reply_to_message
     sender = reply_msg.from_user
     text = reply_msg.text or reply_msg.caption
     if not text:
-        await update.message.reply_text("❌ Сообщение пустое или не поддерживается.");  return
+        await update.message.reply_text("❌ Bu mesajda alıntılanacak metin yok.")
+        return
+
     name = sender.full_name
     avatar = None
+
     try:
         photos = await context.bot.get_user_profile_photos(sender.id, limit=1)
         if photos.total_count > 0:
@@ -223,79 +203,88 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         avatar = None
 
-    W, H = 800, 400
-    bg = Image.new("RGB", (W, H), (40, 44, 52))
+    W = 900
+    PADDING = 40
+    BUBBLE_PADDING = 30
+    PROFILE_SIZE = 100
+    LINE_SPACING = 10
+
+    bg = Image.new("RGB", (W, 400), (235, 235, 235))
     draw = ImageDraw.Draw(bg)
-    # Fallback to default font on servers
+
     try:
-        font_name = ImageFont.truetype("DejaVuSans-Bold.ttf", 30)
-        font_text = ImageFont.truetype("DejaVuSans.ttf", 24)
+        font_name = ImageFont.truetype("DejaVuSans-Bold.ttf", 32)
+        font_text = ImageFont.truetype("DejaVuSans.ttf", 28)
     except Exception:
-        font_name = ImageFont.load_default(); font_text = ImageFont.load_default()
+        font_name = ImageFont.load_default()
+        font_text = ImageFont.load_default()
 
     if avatar:
-        avatar = avatar.resize((100, 100))
-        mask = Image.new("L", (100, 100), 0); ImageDraw.Draw(mask).ellipse((0,0,100,100), fill=255)
-        bg.paste(avatar, (30, 30), mask)
+        avatar = avatar.resize((PROFILE_SIZE, PROFILE_SIZE))
+        mask = Image.new("L", (PROFILE_SIZE, PROFILE_SIZE), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, PROFILE_SIZE, PROFILE_SIZE), fill=255)
+        bg.paste(avatar, (PADDING, PADDING), mask)
 
-    import textwrap
-    draw.text((150, 50), name, fill=(255,255,255), font=font_name)
-    wrapped = textwrap.fill(text, width=45)
-    draw.text((150, 100), wrapped, fill=(220,220,220), font=font_text)
+    name_x = PADDING + PROFILE_SIZE + 20
+    name_y = PADDING + 5
+    draw.text((name_x, name_y), name, fill="#0088cc", font=font_name)
 
-    out = BytesIO(); bg.save(out, format="PNG"); out.seek(0)
-    await update.message.reply_photo(photo=out, caption=f"💬 Цитата от {name}")
+    text_width = W - name_x - PADDING - BUBBLE_PADDING
+    lines = []
+    words = text.split()
+    current = ""
+    for word in words:
+        test_line = (current + " " + word).strip()
+        if draw.textlength(test_line, font=font_text) <= text_width:
+            current = test_line
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
 
-async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    html = fetch_menu_html(); menu = parse_menu(html)
-    days = len(menu); items = sum(len(v) for v in menu.values()); imgs = sum(1 for v in menu.values() for d in v if d.get("img"))
-    await update.message.reply_text(f"Days: {days}\nItems: {items}\nWith images: {imgs}")
+    text_height = sum(font_text.getbbox(line)[3] for line in lines) + (len(lines) - 1) * LINE_SPACING
 
-async def post_init(app):
-    await app.bot.delete_webhook(drop_pending_updates=True)
-    await app.bot.set_my_commands([
-        BotCommand("yemek", "Показать меню"),
-        BotCommand("quote", "Создать цитату из сообщения"),
-        BotCommand("debug", "Статистика парсера"),
-    ])
+    bubble_x = name_x
+    bubble_y = name_y + 45
+    bubble_w = text_width + BUBBLE_PADDING * 2
+    bubble_h = text_height + BUBBLE_PADDING * 2
 
-async def on_error(update: object, context):
-    # Log but DO NOT exit; run_polling loop below will handle Conflict backoff
-    logging.exception("Error: %s", context.error)
+    shadow_offset = 4
+    shadow_color = (180, 180, 180)
+    draw.rounded_rectangle(
+        (bubble_x + shadow_offset, bubble_y + shadow_offset, bubble_x + bubble_w + shadow_offset, bubble_y + bubble_h + shadow_offset),
+        radius=25, fill=shadow_color
+    )
+    draw.rounded_rectangle(
+        (bubble_x, bubble_y, bubble_x + bubble_w, bubble_y + bubble_h),
+        radius=25, fill="white"
+    )
 
-def build_app():
-    scheduler = AsyncIOScheduler(timezone=BISHKEK_TZ)
-    job_queue = JobQueue(); job_queue.scheduler = scheduler
-    app = (ApplicationBuilder().token(BOT_TOKEN).job_queue(job_queue).post_init(post_init).build())
-    app.add_handler(CommandHandler("yemek", yemek))
-    app.add_handler(CommandHandler("quote", quote))
-    app.add_handler(CommandHandler("debug", debug))
-    app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^-sms\s*\d{1,3}$"), sms_purge))
-    app.add_error_handler(on_error)
-    return app
+    ty = bubble_y + BUBBLE_PADDING
+    for line in lines:
+        draw.text((bubble_x + BUBBLE_PADDING, ty), line, fill=(0, 0, 0), font=font_text)
+        ty += font_text.getbbox(line)[3] + LINE_SPACING
+
+    height_needed = ty + PADDING
+    if height_needed < bg.height:
+        bg = bg.crop((0, 0, W, height_needed))
+
+    out = BytesIO()
+    bg.save(out, format="PNG")
+    out.seek(0)
+    await update.message.reply_photo(photo=out, caption=f"💬 {name} dedi ki:")
+
+# ========== MAIN ==========
 
 def main():
-    if not BOT_TOKEN or BOT_TOKEN == "REPLACE_ME_WITH_BOTFATHER_TOKEN":
-        raise RuntimeError("BOT_TOKEN is missing.")
-    # Retry loop: if Conflict occurs, sleep & retry polling
-    backoff = 5
-    while True:
-        app = build_app()
-        try:
-            log.info("🤖 Bot is running...")
-            app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-        except Conflict as e:
-            log.error("Conflict detected (%s). Retrying in %ss …", e, backoff)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 60)  # exponential backoff up to 60s
-            continue
-        except Exception as e:
-            log.exception("Fatal error: %s", e)
-            time.sleep(5)
-            continue
-        # Normal stop (rare in Railway); break loop
-        break
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("yemek", yemek))
+    app.add_handler(CommandHandler("quote", quote))
+    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(MessageHandler(filters.Regex(r"^-sms\s*\d{1,3}$"), sms_purge))
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
