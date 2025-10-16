@@ -6,4 +6,4 @@ apscheduler==3.10.4
 deep-translator
 httpx[http2]
 pillow
-
+lxml
