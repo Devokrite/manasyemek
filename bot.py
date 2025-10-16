@@ -1,12 +1,13 @@
+# bot.py (Railway-friendly, conflict-proof, with /yemek, dayafter + week, purge command)
+import os
+import sys
 import logging
 import re
 import time
+import asyncio
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
-from telegram.ext import MessageHandler, filters
-import asyncio
-import re
 
 import requests
 from bs4 import BeautifulSoup
@@ -19,27 +20,37 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaPhoto,
+    BotCommand,
 )
 from telegram.constants import ParseMode
+from telegram.error import Conflict
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
     JobQueue,
+    MessageHandler,
+    filters,
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # =======================
+# VERSION & LOGGING
+# =======================
+VERSION = "v3.3-conflict-guard"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("manas_menu_bot")
+log.info("Starting bot version %s", VERSION)
+
+# =======================
 # CONFIG
 # =======================
-BOT_TOKEN = "7681582309:AAF8Zv0nNkV50LviL0gU1pusj8egDbE9_mw"   # <-- your token
+# Pull token from environment on Railway. Fallback to hardcoded only if needed.
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "7681582309:AAF8Zv0nNkV50LviL0gU1pusj8egDbE9_mw"
 BASE_URL = "https://beslenme.manas.edu.kg"
 MENU_URL = f"{BASE_URL}/menu"
 BISHKEK_TZ = pytz_timezone("Asia/Bishkek")
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("manas_menu_bot")
 
 # =======================
 # UI (RU)
@@ -50,10 +61,12 @@ TXT = {
     "today": "🍽️ Сегодня",
     "tomorrow": "🍱 Завтра",
     "dayafter": "🥘 Послезавтра",
+    "week": "📅 Неделя",
     "no_today": "Меню на сегодня не найдено.",
     "no_tomorrow": "Меню на завтра не найдено.",
     "no_dayafter": "Меню на послезавтра не найдено.",
     "no_week": "Недельное меню не найдено.",
+    "weekly_header": "📅 Меню на неделю (фото блюд ниже)",
     "could_not_load": "❌ Не удалось загрузить меню. Попробуйте позже.",
     "kcal": "ккал",
 }
@@ -79,7 +92,7 @@ def fetch_menu_html() -> str:
     if time.time() - _cache["ts"] < CACHE_TTL and _cache["raw"]:
         return _cache["raw"]
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; MenuBot/3.1)",
+        "User-Agent": "Mozilla/5.0 (compatible; MenuBot/3.3)",
         "Accept-Language": "tr-TR,tr;q=0.9,ru;q=0.8,en;q=0.7",
         "Cache-Control": "no-cache",
     }
@@ -163,25 +176,23 @@ def get_for_date(menu, dt: datetime):
             return k, v
     return None, None
 
-from telegram import InputMediaPhoto  # make sure this import exists
-
 def media_group_for(dishes: list[dict]):
     """Build a media group without captions to avoid repeating the first dish under the photos."""
     media = []
     for d in dishes:
         if d.get("img"):
-            media.append(InputMediaPhoto(media=d["img"]))  # <-- no caption
+            media.append(InputMediaPhoto(media=d["img"]))  # no caption
     return media
 
 # =======================
-# TELEGRAM
+# COMMANDS & HANDLERS
 # =======================
 async def yemek(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # command entrypoint: /yemek
     kb = [
         [InlineKeyboardButton(TXT["today"], callback_data="today")],
         [InlineKeyboardButton(TXT["tomorrow"], callback_data="tomorrow")],
         [InlineKeyboardButton(TXT["dayafter"], callback_data="dayafter")],
+        [InlineKeyboardButton(TXT["week"], callback_data="week")],
     ]
     await update.message.reply_text(TXT["welcome"], reply_markup=InlineKeyboardMarkup(kb))
 
@@ -212,15 +223,12 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if choice == "today":
         k, v = get_for_date(menu, now)
         await send_day(k, v, "no_today")
-
     elif choice == "tomorrow":
         k, v = get_for_date(menu, now + timedelta(days=1))
         await send_day(k, v, "no_tomorrow")
-
     elif choice == "dayafter":
         k, v = get_for_date(menu, now + timedelta(days=2))
         await send_day(k, v, "no_dayafter")
-
     elif choice == "week":
         if not menu:
             await q.edit_message_text(TXT["no_week"])
@@ -236,7 +244,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for i in range(0, len(media), 10):
                 await context.bot.send_media_group(chat_id=q.message.chat_id, media=media[i:i+10])
 
-# Optional debug
 async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     html = fetch_menu_html()
     menu = parse_menu(html)
@@ -244,42 +251,34 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     items = sum(len(v) for v in menu.values())
     imgs = sum(1 for v in menu.values() for d in v if d.get("img"))
     await update.message.reply_text(f"Days: {days}\nItems: {items}\nWith images: {imgs}")
-SMS_REGEX = re.compile(r"^-sms\s+(\d{1,3})$")
+
+# --- Purge text trigger: accepts "-sms10" and "-sms 10"
+SMS_REGEX = re.compile(r"^-sms\s*(\d{1,3})$", re.IGNORECASE)
 
 async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     chat = update.effective_chat
-    text = msg.text or msg.caption or ""
+    text = (msg.text or msg.caption or "").strip()
 
-    m = SMS_REGEX.match(text.strip())
+    m = SMS_REGEX.match(text)
     if not m:
         return
 
     n = int(m.group(1))
-    # clamp to a sane limit (Telegram rate limits; 300 is already a lot)
     n = max(1, min(n, 300))
 
-    # Permission hints
     if chat.type in ("group", "supergroup"):
-        try:
-            me = await context.bot.get_chat_member(chat.id, context.bot.id)
-            if not (me.can_delete_messages or (getattr(me, "status", "") in ("creator", "administrator"))):
-                await msg.reply_text("У меня нет права удалять сообщения в этом чате. Дайте право «Удалять сообщения».")
-                return
-        except Exception:
-            pass
+        me = await context.bot.get_chat_member(chat.id, context.bot.id)
+        if not (me.status in ("administrator", "creator") and getattr(me, "can_delete_messages", True)):
+            await msg.reply_text("Мне нужны права «Удалять сообщения» в этом чате.")
+            return
     else:
-        # private chat: bot can only delete its own messages
         await msg.reply_text("В личном чате я могу удалять только свои сообщения.")
-        # continue anyway; we’ll skip failures
 
-    deleted = 0
-    failures = 0
-
-    # delete the command message itself last (or first, your choice)
     start_id = msg.message_id
+    deleted = 0
+    skipped = 0
 
-    # Go backwards from the command message
     for i in range(1, n + 1):
         mid = start_id - i
         if mid <= 0:
@@ -287,33 +286,54 @@ async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.delete_message(chat_id=chat.id, message_id=mid)
             deleted += 1
-            # small delay to avoid 429 Too Many Requests
             await asyncio.sleep(0.03)
         except Exception:
-            failures += 1
-            # ignore messages we can’t delete (permissions, too old, etc.)
+            skipped += 1
             await asyncio.sleep(0.01)
 
-    # Optionally delete the command itself too
     try:
         await context.bot.delete_message(chat_id=chat.id, message_id=start_id)
     except Exception:
         pass
 
-    # Send a transient status (then delete it so chat stays clean)
     try:
-        status = await context.bot.send_message(
-            chat.id, f"🧹 Удалено: {deleted} • Пропущено: {failures}"
-        )
+        s = await context.bot.send_message(chat.id, f"🧹 Удалено: {deleted} • Пропущено: {skipped}")
         await asyncio.sleep(2)
-        await context.bot.delete_message(chat_id=chat.id, message_id=status.message_id)
+        await context.bot.delete_message(chat_id=chat.id, message_id=s.message_id)
     except Exception:
         pass
+
+# =======================
+# STARTUP HOOKS & ERROR HANDLER
+# =======================
+async def post_init(app):
+    # Ensure webhook is OFF so polling can run; also drop any old queued updates
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    # Populate slash menu
+    await app.bot.set_my_commands([
+        BotCommand("yemek", "Показать меню: сегодня/завтра/послезавтра/неделя"),
+        BotCommand("debug", "Статистика парсера"),
+    ], language_code="ru")
+    await app.bot.set_my_commands([
+        BotCommand("yemek", "Show menu: today/tomorrow/day after/week"),
+        BotCommand("debug", "Parser stats"),
+    ])
+
+async def on_error(update: object, context):
+    err = context.error
+    logging.exception("Handler error: %s", err)
+    # If another instance is polling, exit so Railway keeps only one
+    if isinstance(err, Conflict):
+        await asyncio.sleep(1)
+        sys.exit(0)
 
 # =======================
 # MAIN
 # =======================
 def main():
+    if not BOT_TOKEN or BOT_TOKEN == "REPLACE_ME_WITH_BOTFATHER_TOKEN":
+        raise RuntimeError("BOT_TOKEN is missing. Set it in Railway Variables or hardcode for local testing.")
+
     scheduler = AsyncIOScheduler(timezone=BISHKEK_TZ)
     job_queue = JobQueue()
     job_queue.scheduler = scheduler
@@ -322,22 +342,27 @@ def main():
         ApplicationBuilder()
         .token(BOT_TOKEN)
         .job_queue(job_queue)
+        .post_init(post_init)                 # kill webhook + set commands
         .build()
     )
 
-    # use /yemek to open the menu
+    # Commands
     app.add_handler(CommandHandler("yemek", yemek))
-    # if you ALSO want /start, uncomment the next line:
+    # Uncomment if you also want /start to open the same menu:
     # app.add_handler(CommandHandler("start", yemek))
-
     app.add_handler(CommandHandler("debug", debug))
+
+    # Callbacks (buttons)
     app.add_handler(CallbackQueryHandler(button))
 
-    print("🤖 Bot is running... Press Ctrl+C to stop.")
-    app.run_polling()
-    # Purge text trigger: "-sms 100"
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^-sms\s+\d{1,3}$"), sms_purge))
+    # Text triggers
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^-sms\s*\d{1,3}$"), sms_purge))
+
+    # Global error handler to gracefully exit on Conflict
+    app.add_error_handler(on_error)
+
+    log.info("🤖 Bot is running...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
-
