@@ -19,8 +19,10 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaPhoto,
+    ChatPermissions,
 )
-from telegram.constants import ParseMode
+from telegram.constants import ParseMode, ChatType
+from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -28,6 +30,7 @@ from telegram.ext import (
     ContextTypes,
     JobQueue,
 )
+from telegram.helpers import mention_html
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # =======================
@@ -174,6 +177,136 @@ def media_group_for(dishes: list[dict]):
     return media
 
 # =======================
+
+# =======================
+# MODERATION HELPERS (mute/unmute)
+# =======================
+DUR_RE = re.compile(r"^(\d+)([smhd])$", re.U)  # 10m, 2h, 1d
+
+def parse_duration(s: str | None) -> timedelta | None:
+    """Return a timedelta for inputs like '10m', '2h', '1d'; default 10m."""
+    if not s:
+        return timedelta(minutes=10)
+    m = DUR_RE.match(s.lower())
+    if not m:
+        return timedelta(minutes=10)
+    n, unit = int(m.group(1)), m.group(2)
+    return {
+        "s": timedelta(seconds=n),
+        "m": timedelta(minutes=n),
+        "h": timedelta(hours=n),
+        "d": timedelta(days=n),
+    }[unit]
+
+def build_mute_permissions() -> ChatPermissions:
+    return ChatPermissions(
+        can_send_messages=False,
+        can_send_audios=False,
+        can_send_documents=False,
+        can_send_photos=False,
+        can_send_videos=False,
+        can_send_video_notes=False,
+        can_send_voice_notes=False,
+        can_send_polls=False,
+        can_send_other_messages=False,
+        can_add_web_page_previews=False,
+    )
+
+def build_unmute_permissions() -> ChatPermissions:
+    return ChatPermissions(
+        can_send_messages=True,
+        can_send_audios=True,
+        can_send_documents=True,
+        can_send_photos=True,
+        can_send_videos=True,
+        can_send_video_notes=True,
+        can_send_voice_notes=True,
+        can_send_polls=True,
+        can_send_other_messages=True,
+        can_add_web_page_previews=True,
+    )
+
+async def _resolve_target_from_message(msg):
+    # Prefer reply
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        return msg.reply_to_message.from_user
+    # Try TEXT_MENTION entity
+    for ent in (msg.entities or []):
+        if ent.type == "text_mention" and ent.user:
+            return ent.user
+    # Fallback: numeric ID as second arg (/mute 123456789 30m)
+    parts = (msg.text or msg.caption or "").strip().split()
+    if len(parts) >= 2:
+        try:
+            uid = int(parts[1])
+            class _U:
+                def __init__(self, id): self.id=id; self.full_name=f"ID {id}"
+            return _U(uid)
+        except Exception:
+            pass
+    return None
+
+async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    chat = update.effective_chat
+
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await msg.reply_text("This command works only in groups.")
+        return
+
+    me = await context.bot.get_chat_member(chat.id, context.bot.id)
+    if not (getattr(me, "can_restrict_members", False) or getattr(me, "status", "") in ("administrator","creator")):
+        await msg.reply_text("I need the 'Restrict members' admin right.")
+        return
+
+    target = await _resolve_target_from_message(msg)
+    if not target:
+        await msg.reply_text("Reply to the user's message, or use a text mention (or numeric ID).")
+        return
+
+    parts = (msg.text or "").split()
+    dur = parse_duration(parts[2] if len(parts) >= 3 else None)
+    until = datetime.now(BISHKEK_TZ) + dur
+
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id=chat.id,
+            user_id=target.id,
+            permissions=build_mute_permissions(),
+            until_date=until
+        )
+        await msg.reply_html(f"🔇 Muted {mention_html(target.id, getattr(target, 'full_name', 'user'))} until <b>{until.strftime('%H:%M, %d.%m')}</b>.")
+    except BadRequest as e:
+        await msg.reply_text(f"Failed to mute: {e.message or str(e)}")
+
+async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    chat = update.effective_chat
+
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await msg.reply_text("This command works only in groups.")
+        return
+
+    me = await context.bot.get_chat_member(chat.id, context.bot.id)
+    if not (getattr(me, "can_restrict_members", False) or getattr(me, "status", "") in ("administrator","creator")):
+        await msg.reply_text("I need the 'Restrict members' admin right.")
+        return
+
+    target = await _resolve_target_from_message(msg)
+    if not target:
+        await msg.reply_text("Reply to the user's message, or use a text mention (or numeric ID).")
+        return
+
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id=chat.id,
+            user_id=target.id,
+            permissions=build_unmute_permissions(),
+            until_date=None
+        )
+        await msg.reply_html(f"🔊 Unmuted {mention_html(target.id, getattr(target, 'full_name', 'user'))}.")
+    except BadRequest as e:
+        await msg.reply_text(f"Failed to unmute: {e.message or str(e)}")
 # TELEGRAM
 # =======================
 async def yemek(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -331,12 +464,18 @@ def main():
     # app.add_handler(CommandHandler("start", yemek))
 
     app.add_handler(CommandHandler("debug", debug))
+
+    # moderation
+    app.add_handler(CommandHandler("mute", mute_cmd))
+    app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(CallbackQueryHandler(button))
 
     print("🤖 Bot is running... Press Ctrl+C to stop.")
-    app.run_polling()
     # Purge text trigger: "-sms 100"
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^-sms\s+\d{1,3}$"), sms_purge))
+
+    print("🤖 Bot is running... Press Ctrl+C to stop.")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
