@@ -4,6 +4,9 @@ import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
+from telegram.ext import MessageHandler, filters
+import asyncio
+import re
 
 import requests
 from bs4 import BeautifulSoup
@@ -241,6 +244,71 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     items = sum(len(v) for v in menu.values())
     imgs = sum(1 for v in menu.values() for d in v if d.get("img"))
     await update.message.reply_text(f"Days: {days}\nItems: {items}\nWith images: {imgs}")
+SMS_REGEX = re.compile(r"^-sms\s+(\d{1,3})$")
+
+async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    chat = update.effective_chat
+    text = msg.text or msg.caption or ""
+
+    m = SMS_REGEX.match(text.strip())
+    if not m:
+        return
+
+    n = int(m.group(1))
+    # clamp to a sane limit (Telegram rate limits; 300 is already a lot)
+    n = max(1, min(n, 300))
+
+    # Permission hints
+    if chat.type in ("group", "supergroup"):
+        try:
+            me = await context.bot.get_chat_member(chat.id, context.bot.id)
+            if not (me.can_delete_messages or (getattr(me, "status", "") in ("creator", "administrator"))):
+                await msg.reply_text("У меня нет права удалять сообщения в этом чате. Дайте право «Удалять сообщения».")
+                return
+        except Exception:
+            pass
+    else:
+        # private chat: bot can only delete its own messages
+        await msg.reply_text("В личном чате я могу удалять только свои сообщения.")
+        # continue anyway; we’ll skip failures
+
+    deleted = 0
+    failures = 0
+
+    # delete the command message itself last (or first, your choice)
+    start_id = msg.message_id
+
+    # Go backwards from the command message
+    for i in range(1, n + 1):
+        mid = start_id - i
+        if mid <= 0:
+            break
+        try:
+            await context.bot.delete_message(chat_id=chat.id, message_id=mid)
+            deleted += 1
+            # small delay to avoid 429 Too Many Requests
+            await asyncio.sleep(0.03)
+        except Exception:
+            failures += 1
+            # ignore messages we can’t delete (permissions, too old, etc.)
+            await asyncio.sleep(0.01)
+
+    # Optionally delete the command itself too
+    try:
+        await context.bot.delete_message(chat_id=chat.id, message_id=start_id)
+    except Exception:
+        pass
+
+    # Send a transient status (then delete it so chat stays clean)
+    try:
+        status = await context.bot.send_message(
+            chat.id, f"🧹 Удалено: {deleted} • Пропущено: {failures}"
+        )
+        await asyncio.sleep(2)
+        await context.bot.delete_message(chat_id=chat.id, message_id=status.message_id)
+    except Exception:
+        pass
 
 # =======================
 # MAIN
@@ -267,6 +335,8 @@ def main():
 
     print("🤖 Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
+    # Purge text trigger: "-sms 100"
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^-sms\s+\d{1,3}$"), sms_purge))
 
 if __name__ == "__main__":
     main()
