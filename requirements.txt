@@ -1,9 +1,9 @@
-python-telegram-bot==21.6
+python-telegram-bot==20.6
 beautifulsoup4
 requests
-pytz
-apscheduler==3.10.4
-deep-translator
-httpx[http2]
-pillow
+Pillow
 lxml
+httpx
+deep-translator
+apscheduler
+pytz
