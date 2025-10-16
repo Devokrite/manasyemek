@@ -15,6 +15,7 @@ from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 )
+BOT_TOKEN = "7681582309:AAF8Zv0nNkV50LviL0gU1pusj8egDbE9_mw"
 
 BOT_TOKEN = os.getenv("7681582309:AAF8Zv0nNkV50LviL0gU1pusj8egDbE9_mw")
 MENU_URL = "https://beslenme.manas.edu.kg/menu"
