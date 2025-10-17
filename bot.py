@@ -935,33 +935,23 @@ def main():
             filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
         )
     )
-       
     app.add_handler(CommandHandler("yemek", yemek))
-    # app.add_handler(CommandHandler("start", yemek))  # optional /start alias
-
     app.add_handler(CommandHandler("debug", debug))
     app.add_handler(CommandHandler(["say", "echo"], say))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(CallbackQueryHandler(button))
-
-    # --- Message handlers ---
     app.add_handler(
         MessageHandler(
             filters.TEXT & filters.Regex(r"^-sms\s+\d{1,3}$"),
             sms_purge,
         )
     )
-app.add_handler(
-    CommandHandler(
-        ["quote", "q"],
-        quote,
-        filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
-    )
-)
 
+    # ✅ only 4 spaces here (inside def main)
     print("🤖 Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
