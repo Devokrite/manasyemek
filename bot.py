@@ -1,19 +1,18 @@
+import asyncio
 import logging
 import re
 import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
-from telegram.ext import MessageHandler, filters
-import asyncio
-import re
 
 import requests
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from pytz import timezone as pytz_timezone
 from deep_translator import GoogleTranslator
-from PIL import ImageDraw, ImageFont, ImageOps
+from pytz import timezone as pytz_timezone
+from PIL import Image, ImageDraw, ImageFont, ImageOps  # <-- Image included
+
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -23,14 +22,16 @@ from telegram import (
 )
 from telegram.constants import ParseMode, ChatType
 from telegram.error import BadRequest
+from telegram.helpers import mention_html
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
     JobQueue,
+    MessageHandler,
+    filters,
 )
-from telegram.helpers import mention_html
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # =======================
