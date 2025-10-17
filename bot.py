@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pytz import timezone as pytz_timezone
 from deep_translator import GoogleTranslator
-
+from PIL import ImageDraw, ImageFont, ImageOps
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -177,6 +177,132 @@ def media_group_for(dishes: list[dict]):
     return media
 
 # ======================= ADDED COMMANDS 
+def _load_font(size: int) -> ImageFont.FreeTypeFont:
+    # Try DejaVu (bundled with Pillow). Fallback to default bitmap font.
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", size=size)
+    except Exception:
+        return ImageFont.load_default()
+
+def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+    # Simple greedy word-wrap
+    words = text.split()
+    lines, cur = [], []
+    for w in words:
+        test = (" ".join(cur + [w])).strip()
+        if draw.textlength(test, font=font) <= max_width:
+            cur.append(w)
+        else:
+            if cur: lines.append(" ".join(cur))
+            cur = [w]
+    if cur: lines.append(" ".join(cur))
+    return lines
+
+def _make_round_avatar(img: Image.Image, size: int = 96) -> Image.Image:
+    img = img.convert("RGB").resize((size, size))
+    mask = Image.new("L", (size, size), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0, 0, size, size), fill=255)
+    return ImageOps.fit(img, (size, size), centering=(0.5, 0.5)).putalpha(mask) or Image.merge("RGBA", (*img.split(), mask))
+
+async def _fetch_user_avatar_bytes(context, user_id: int) -> bytes | None:
+    try:
+        photos = await context.bot.get_user_profile_photos(user_id=user_id, limit=1)
+        if photos.total_count and photos.photos:
+            file_id = photos.photos[0][-1].file_id  # largest size
+            file = await context.bot.get_file(file_id)
+            bio = io.BytesIO()
+            # PTB v21
+            try:
+                await file.download_to_memory(out=bio)
+                return bio.getvalue()
+            except Exception:
+                # PTB v20 fallback
+                data = await file.download_as_bytearray()
+                return bytes(data)
+    except Exception:
+        pass
+    return None
+
+def _render_quote_card(pfp_img: Image.Image | None, display_name: str, handle: str | None, text: str) -> bytes:
+    # Layout params
+    W = 900
+    P = 32
+    AV = 96
+    GAP = 20
+    BUBBLE_PAD = 22
+    NAME_SIZE = 36
+    HANDLE_SIZE = 28
+    TEXT_SIZE = 32
+    BUBBLE_RADIUS = 22
+
+    # Fonts
+    font_name = _load_font(NAME_SIZE)
+    font_handle = _load_font(HANDLE_SIZE)
+    font_text = _load_font(TEXT_SIZE)
+
+    # Create base (light background)
+    base = Image.new("RGB", (W, 10), (248, 249, 250))
+    draw = ImageDraw.Draw(base)
+
+    # Prepare avatar (rounded)
+    if pfp_img is not None:
+        try:
+            pfp_rgba = pfp_img.convert("RGBA")
+            # Circular mask
+            mask = Image.new("L", (AV, AV), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, AV, AV), fill=255)
+            pfp_rgba = pfp_rgba.resize((AV, AV))
+            avatar = Image.new("RGBA", (AV, AV))
+            avatar.paste(pfp_rgba, (0, 0), mask)
+        except Exception:
+            avatar = None
+    else:
+        avatar = None
+
+    # Measure header (name + handle)
+    x = P + AV + GAP
+    y = P
+    name_w = draw.textlength(display_name, font=font_name)
+    handle_w = draw.textlength(handle or "", font=font_handle)
+    header_h = max(AV, int(font_name.size * 1.2) + (int(font_handle.size * 1.1) if handle else 0))
+
+    # Wrap message text
+    bubble_w = W - x - P
+    text_lines = _wrap_text(draw, text, font_text, bubble_w - 2 * BUBBLE_PAD)
+    line_heights = [font_text.getbbox(line)[3] - font_text.getbbox(line)[1] for line in text_lines] or [font_text.size]
+    text_h = sum(line_heights) + (len(text_lines) - 1) * 6
+    bubble_h = text_h + 2 * BUBBLE_PAD
+
+    total_h = P + header_h + GAP + bubble_h + P
+    base = base.resize((W, total_h))
+    draw = ImageDraw.Draw(base)
+
+    # Draw avatar
+    if avatar:
+        base.paste(avatar, (P, P), avatar)
+
+    # Draw name & handle
+    draw.text((x, y), display_name, font=font_name, fill=(20, 20, 20))
+    if handle:
+        draw.text((x, y + int(font_name.size * 1.2)), handle, font=font_handle, fill=(100, 100, 110))
+
+    # Bubble rect
+    bx1, by1 = x, P + header_h + GAP
+    bx2, by2 = x + bubble_w, by1 + bubble_h
+    # Rounded rectangle
+    draw.rounded_rectangle([bx1, by1, bx2, by2], radius=BUBBLE_RADIUS, fill=(255, 255, 255), outline=(230, 232, 235), width=2)
+
+    # Draw message text
+    ty = by1 + BUBBLE_PAD
+    for idx, line in enumerate(text_lines):
+        draw.text((bx1 + BUBBLE_PAD, ty), line, font=font_text, fill=(25, 25, 26))
+        ty += (font_text.getbbox(line)[3] - font_text.getbbox(line)[1]) + 6
+
+    # Export bytes
+    out = io.BytesIO()
+    base.save(out, format="PNG")
+    return out.getvalue()
 async def say(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
 
@@ -543,7 +669,13 @@ def main():
         filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP
     )
 )
-
+app.add_handler(
+    CommandHandler(
+        ["qshot", "qimg", "quoteimg"],
+        qshot,
+        filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP
+    )
+)
     # use /yemek to open the menu
     app.add_handler(CommandHandler("yemek", yemek))
     # if you ALSO want /start, uncomment the next line:
