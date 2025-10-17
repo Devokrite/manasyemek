@@ -37,17 +37,33 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from telegram import Update
 from telegram.ext import ContextTypes
-import os, urllib.request, pathlib
+# put with your /quote code imports
+from pathlib import Path
+from PIL import ImageFont
 
-FONT_DIR = pathlib.Path(__file__).parent / "fonts"
-FONT_PATH = FONT_DIR / "NotoSans-Regular.ttf"
+def _pick_font(size: int):
+    # 1) Use Pillow’s bundled DejaVu (has Cyrillic)
+    try:
+        pil_font = Path(ImageFont.__file__).parent / "fonts" / "DejaVuSans.ttf"
+        return ImageFont.truetype(str(pil_font), size=size)
+    except Exception:
+        pass
 
-# Download Cyrillic font at runtime if missing
-if not FONT_PATH.exists():
-    FONT_DIR.mkdir(exist_ok=True)
-    url = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf"
-    print("[quote] Downloading NotoSans-Regular.ttf...")
-    urllib.request.urlretrieve(url, FONT_PATH)
+    # 2) Try common system fonts if available
+    for p in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ):
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size=size)
+            except Exception:
+                continue
+
+    # 3) Last resort (won’t render Cyrillic perfectly but avoids crash)
+    return ImageFont.load_default()
+
 # =======================
 # CONFIG
 # =======================
