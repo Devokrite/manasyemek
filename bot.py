@@ -37,7 +37,17 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from telegram import Update
 from telegram.ext import ContextTypes
+import os, urllib.request, pathlib
 
+FONT_DIR = pathlib.Path(__file__).parent / "fonts"
+FONT_PATH = FONT_DIR / "NotoSans-Regular.ttf"
+
+# Download Cyrillic font at runtime if missing
+if not FONT_PATH.exists():
+    FONT_DIR.mkdir(exist_ok=True)
+    url = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf"
+    print("[quote] Downloading NotoSans-Regular.ttf...")
+    urllib.request.urlretrieve(url, FONT_PATH)
 # =======================
 # CONFIG
 # =======================
@@ -803,17 +813,13 @@ async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.delete_message(chat_id=chat.id, message_id=status.message_id)
     except Exception:
         pass
-# ---------- /quote v2: Cyrillic + avatar fallback + autosize ----------
+# ---------- /quote v3: Hi-res + bigger readable text ----------
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from telegram import Update
 from telegram.ext import ContextTypes
-import hashlib
-import os
-import re
+import hashlib, os, re
 
-# Put a Cyrillic-capable font in your repo if possible:
-# e.g. project/fonts/NotoSans-Regular.ttf
 FONT_PATHS = [
     "fonts/NotoSans-Regular.ttf",
     "fonts/Inter-Regular.ttf",
@@ -829,11 +835,9 @@ def _pick_font(size: int):
                 return ImageFont.truetype(p, size=size)
             except Exception:
                 pass
-    # last resort (bitmap)
     return ImageFont.load_default()
 
 def _initials(name: str) -> str:
-    # derive initials from display name or username
     parts = re.findall(r"\w+", name, flags=re.UNICODE)
     if not parts:
         return "?"
@@ -842,17 +846,13 @@ def _initials(name: str) -> str:
     return (parts[0][0] + parts[1][0]).upper()
 
 def _color_from_text(text: str) -> tuple:
-    # stable pretty color from text
     h = hashlib.md5(text.encode("utf-8")).hexdigest()
     r = int(h[0:2], 16)
     g = int(h[2:4], 16)
     b = int(h[4:6], 16)
-    # soften
     return (100 + r % 120, 100 + g % 120, 100 + b % 120)
 
-async def _get_avatar_or_initials(bot, author, size: int = 180) -> Image.Image:
-    """Try to fetch photo; else draw initials circle."""
-    # Try Telegram profile photo
+async def _get_avatar_or_initials(bot, author, size: int = 280) -> Image.Image:
     try:
         photos = await bot.get_user_profile_photos(user_id=author.id, limit=1)
         if photos.total_count > 0:
@@ -867,12 +867,12 @@ async def _get_avatar_or_initials(bot, author, size: int = 180) -> Image.Image:
     except Exception:
         pass
 
-    # Fallback: initials avatar
+    # fallback initials avatar
     circle = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(circle)
     bg = _color_from_text(author.full_name or author.username or "user")
     draw.ellipse((0, 0, size-1, size-1), fill=bg)
-    f = _pick_font(int(size * 0.42))
+    f = _pick_font(int(size * 0.45))
     text = _initials(author.full_name or author.username or "?")
     tw = draw.textlength(text, font=f)
     bbox = f.getbbox(text)
@@ -880,15 +880,14 @@ async def _get_avatar_or_initials(bot, author, size: int = 180) -> Image.Image:
     draw.text(((size - tw) / 2, (size - th) / 2 - 2), text, font=f, fill=(255, 255, 255, 255))
     return circle
 
-def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+def _wrap(draw, text, font, max_width):
     words = text.split()
     if not words:
         return ""
     lines, cur = [], words[0]
     for w in words[1:]:
-        candidate = cur + " " + w
-        if draw.textlength(candidate, font=font) <= max_width:
-            cur = candidate
+        if draw.textlength(cur + " " + w, font=font) <= max_width:
+            cur += " " + w
         else:
             lines.append(cur)
             cur = w
@@ -898,8 +897,6 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, ma
 async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     bot = context.bot
-
-    # Target message / text
     target = msg.reply_to_message
     if target and (target.text or target.caption):
         text_to_quote = target.text or target.caption
@@ -907,86 +904,77 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         text_to_quote = " ".join(context.args).strip()
         author = msg.from_user
-
     if not text_to_quote:
-        await msg.reply_text("Reply to a message with /quote, or use: /quote your text")
+        await msg.reply_text("Reply to a message with /quote or use: /quote your text")
         return
 
-    # === STYLE ===
-    PADDING = 36
-    AVATAR = 180
+    # --- 2× scale for clarity ---
+    SCALE = 2
+    PADDING = 40 * SCALE
+    AVATAR = 180 * SCALE
     BG = (18, 18, 18, 255)
     BUBBLE = (33, 33, 33, 255)
     NAME = (170, 152, 255, 255)
     TEXT = (245, 245, 245, 255)
     META = (200, 200, 200, 255)
 
-    font_name = _pick_font(48)   # bigger
-    font_text = _pick_font(44)   # bigger for readability
-    font_meta = _pick_font(30)
+    font_name = _pick_font(54 * SCALE)
+    font_text = _pick_font(52 * SCALE)
+    font_meta = _pick_font(36 * SCALE)
 
-    # Base width; we’ll compute height after wrapping
-    W = 1000
-    canvas = Image.new("RGBA", (W, 10), BG)  # temp
-    draw = ImageDraw.Draw(canvas)
+    W = 1000 * SCALE
+    temp = Image.new("RGBA", (W, 10), BG)
+    draw = ImageDraw.Draw(temp)
 
-    # Name/handle
     display_name = author.full_name or (author.username and f"@{author.username}") or "Unknown"
     handle = f"@{author.username}" if author.username else ""
-
-    text_x = PADDING + AVATAR + 24
+    text_x = PADDING + AVATAR + (28 * SCALE)
     top_y = PADDING
 
-    # Bubble sizing: wrap first to get height
     max_bubble_w = W - PADDING - text_x
-    wrapped = _wrap(draw, text_to_quote, font_text, max_bubble_w - 2 * 28)
-    # height estimate
-    _, _, _, name_h = font_name.getbbox(display_name)
-    text_bbox = draw.multiline_textbbox((0, 0), wrapped, font=font_text, spacing=8)
+    wrapped = _wrap(draw, text_to_quote, font_text, max_bubble_w - (56 * SCALE))
+    text_bbox = draw.multiline_textbbox((0, 0), wrapped, font=font_text, spacing=12 * SCALE)
     text_h = text_bbox[3] - text_bbox[1]
-    bubble_h = text_h + 2 * 28
-    content_bottom = top_y + max(AVATAR, 64 + bubble_h)
+    bubble_h = text_h + (64 * SCALE)
+    content_bottom = top_y + max(AVATAR, (100 * SCALE) + bubble_h)
     H = content_bottom + PADDING
 
-    # Final canvas
     img = Image.new("RGBA", (W, H), BG)
     draw = ImageDraw.Draw(img)
 
-    # Avatar (photo or initials)
     avatar = await _get_avatar_or_initials(bot, author, AVATAR)
     img.paste(avatar, (PADDING, top_y), avatar)
 
-    # Name + handle
     draw.text((text_x, top_y), display_name, font=font_name, fill=NAME)
     if handle and handle != display_name:
         name_w = draw.textlength(display_name + "  ", font=font_name)
-        draw.text((text_x + name_w, top_y + 8), handle, font=font_meta, fill=META)
+        draw.text((text_x + name_w, top_y + (12 * SCALE)), handle, font=font_meta, fill=META)
 
-    # Bubble
     bubble_x = text_x
-    bubble_y = top_y + 64
-    r = 26
+    bubble_y = top_y + (90 * SCALE)
+    r = 40 * SCALE
     bubble = Image.new("RGBA", (max_bubble_w, bubble_h), (0, 0, 0, 0))
     bdraw = ImageDraw.Draw(bubble)
     bdraw.rounded_rectangle((0, 0, max_bubble_w, bubble_h), radius=r, fill=BUBBLE)
     img.paste(bubble, (bubble_x, bubble_y), bubble)
 
-    # Text inside bubble
     draw.multiline_text(
-        (bubble_x + 28, bubble_y + 28),
+        (bubble_x + (40 * SCALE), bubble_y + (32 * SCALE)),
         wrapped,
         font=font_text,
         fill=TEXT,
-        spacing=8,
+        spacing=12 * SCALE,
     )
 
-    # Send
+    # Downscale for crisp rendering
+    final_img = img.resize((W // SCALE, H // SCALE), Image.LANCZOS)
     bio = BytesIO()
     bio.name = "quote.png"
-    img.save(bio, format="PNG")
+    final_img.save(bio, format="PNG")
     bio.seek(0)
     await bot.send_photo(chat_id=update.effective_chat.id, photo=bio)
-# ---------- end /quote v2 ----------
+# ---------- end /quote v3 ----------
+
 
 
 # =======================
