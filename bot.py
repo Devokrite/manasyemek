@@ -662,20 +662,22 @@ def main():
         .job_queue(job_queue)
         .build()
     )
+
+    # --- Command handlers ---
     app.add_handler(
-    CommandHandler(
-        ["quote", "q"],
-        quote,
-        filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP
+        CommandHandler(
+            ["quote", "q"],
+            quote,
+            filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
+        )
     )
-)
-app.add_handler(
-    CommandHandler(
-        ["qshot", "qimg", "quoteimg"],
-        qshot,
-        filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP
+    app.add_handler(
+        CommandHandler(
+            ["qshot", "qimg", "quoteimg"],
+            qshot,
+            filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
+        )
     )
-)
     # use /yemek to open the menu
     app.add_handler(CommandHandler("yemek", yemek))
     # if you ALSO want /start, uncomment the next line:
@@ -688,9 +690,14 @@ app.add_handler(
     app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(CallbackQueryHandler(button))
 
-    print("🤖 Bot is running... Press Ctrl+C to stop.")
+    # --- Message handlers ---
     # Purge text trigger: "-sms 100"
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^-sms\s+\d{1,3}$"), sms_purge))
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & filters.Regex(r"^-sms\s+\d{1,3}$"),
+            sms_purge,
+        )
+    )
 
     print("🤖 Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
