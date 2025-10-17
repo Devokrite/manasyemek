@@ -648,115 +648,66 @@ async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 # --- qshot command stub (safe fallback) ---
-from telegram import Update
-from telegram.ext import ContextTypes
-
-async def qshot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    /qshot, /qimg, /quoteimg
-    Временная реализация, чтобы не было NameError.
-    Если хочешь — внутри можно сгенерировать картинку/квоту.
-    """
-    args_text = " ".join(context.args) if context.args else ""
-    if args_text:
-        await update.message.reply_text(f"🖼️ Ваш qshot-текст принят:\n{args_text}\n\n(здесь будет картинка/квота)")
-    else:
-        await update.message.reply_text(
-            "Использование: /qshot <текст цитаты>\n"
-            "Пока это заглушка. Могу позже заменить на генерацию изображения."
-        )
-# --- imports (добавь, если их нет) ---
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
-from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
+from datetime import datetime
+import textwrap
 
-# --- /qshot: рендер текста в изображение и отправка фото ---
-async def qshot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def qshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg:
         return
 
-    # 1) Собираем текст: приоритет — текст из reply, затем аргументы команды
-    parts = []
-    if msg.reply_to_message:
-        rep = msg.reply_to_message
-        if rep.text:
-            parts.append(rep.text)
-        elif rep.caption:
-            parts.append(rep.caption)
-
-    if context.args:
-        parts.append(" ".join(context.args))
-
-    text = " ".join(parts).strip()
+    # Получаем текст
+    text = ""
+    if msg.reply_to_message and (msg.reply_to_message.text or msg.reply_to_message.caption):
+        text = msg.reply_to_message.text or msg.reply_to_message.caption
+    elif context.args:
+        text = " ".join(context.args)
 
     if not text:
-        await msg.reply_text(
-            "Чтобы сделать карточку:\n"
-            "• Ответьте на сообщение с текстом и напишите /qshot\n"
-            "или\n"
-            "• Используйте: /qshot ваш текст"
-        )
+        await msg.reply_text("Ответьте на сообщение с текстом или напишите /qshot <текст>")
         return
 
-    # 2) Параметры изображения
-    W, H = 1080, 1350  # формат 4:5
+    # Настройки изображения
+    W, H = 1080, 1350
     bg_color = (245, 245, 245)
     text_color = (20, 20, 20)
-    pad = 80
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"  # стандартный путь для Railway и Linux
 
+    # Создаём изображение
     img = Image.new("RGB", (W, H), bg_color)
     draw = ImageDraw.Draw(img)
 
-    # 3) Шрифты (пытаемся взять DejaVu, иначе дефолт)
-    try:
-        font = ImageFont.truetype("DejaVuSans.ttf", 56)
-        small = ImageFont.truetype("DejaVuSans.ttf", 36)
-    except:
-        font = ImageFont.load_default()
-        small = ImageFont.load_default()
-
-    # 4) Перенос строк по ширине
-    max_w = W - 2 * pad
-
-    def wrap_text(t: str, f: ImageFont.FreeTypeFont) -> list[str]:
-        words = t.split()
-        lines, cur = [], ""
-        for w in words:
-            candidate = (cur + " " + w).strip()
-            if draw.textlength(candidate, font=f) <= max_w:
-                cur = candidate
-            else:
-                if cur:
-                    lines.append(cur)
-                cur = w
-        if cur:
-            lines.append(cur)
-        return lines
-
-    lines = wrap_text(text, font)
-
-    # 5) Рисуем текст
-    y = pad
-    line_h = (font.getbbox("Ay")[3] - font.getbbox("Ay")[1]) + 12
-    for line in lines:
-        draw.text((pad, y), line, font=font, fill=text_color)
-        y += line_h
-        if y > H - 2*pad:  # защита от переполнения
+    # Пробуем разные размеры шрифта
+    for size in [72, 64, 56, 48, 40]:
+        font = ImageFont.truetype(font_path, size)
+        wrapped = textwrap.fill(text, width=30)
+        bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=10)
+        if bbox[3] - bbox[1] < H - 400:
             break
 
-    # 6) Подпись/футер
-    ts = datetime.now().strftime("%Y-%m-%d")
-    footer = ts
-    draw.text((pad, H - pad), footer, font=small, fill=(120, 120, 120))
+    # Центрируем текст
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    x = (W - text_w) / 2
+    y = (H - text_h) / 2
 
-    # 7) Отправляем как фото
+    # Рисуем
+    draw.multiline_text((x, y), wrapped, font=font, fill=text_color, align="center", spacing=10)
+
+    # Подпись с датой
+    footer = datetime.now().strftime("%Y-%m-%d")
+    footer_font = ImageFont.truetype(font_path, 32)
+    draw.text((W - 220, H - 80), footer, font=footer_font, fill=(120, 120, 120))
+
+    # Отправляем как фото
     bio = BytesIO()
     img.save(bio, format="PNG")
     bio.seek(0)
-    await msg.reply_photo(photo=bio)        
+    await msg.reply_photo(photo=bio)
 # =======================
 # MAIN
 # =======================
