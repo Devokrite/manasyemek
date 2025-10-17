@@ -647,67 +647,7 @@ async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.delete_message(chat_id=chat.id, message_id=status.message_id)
     except Exception:
         pass
-# --- qshot command stub (safe fallback) ---
-from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
-from telegram import Update
-from telegram.ext import ContextTypes
-from datetime import datetime
-import textwrap
 
-async def qshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-    if not msg:
-        return
-
-    # Получаем текст
-    text = ""
-    if msg.reply_to_message and (msg.reply_to_message.text or msg.reply_to_message.caption):
-        text = msg.reply_to_message.text or msg.reply_to_message.caption
-    elif context.args:
-        text = " ".join(context.args)
-
-    if not text:
-        await msg.reply_text("Ответьте на сообщение с текстом или напишите /qshot <текст>")
-        return
-
-    # Настройки изображения
-    W, H = 1080, 1350
-    bg_color = (245, 245, 245)
-    text_color = (20, 20, 20)
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"  # стандартный путь для Railway и Linux
-
-    # Создаём изображение
-    img = Image.new("RGB", (W, H), bg_color)
-    draw = ImageDraw.Draw(img)
-
-    # Пробуем разные размеры шрифта
-    for size in [72, 64, 56, 48, 40]:
-        font = ImageFont.truetype(font_path, size)
-        wrapped = textwrap.fill(text, width=30)
-        bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=10)
-        if bbox[3] - bbox[1] < H - 400:
-            break
-
-    # Центрируем текст
-    text_w = bbox[2] - bbox[0]
-    text_h = bbox[3] - bbox[1]
-    x = (W - text_w) / 2
-    y = (H - text_h) / 2
-
-    # Рисуем
-    draw.multiline_text((x, y), wrapped, font=font, fill=text_color, align="center", spacing=10)
-
-    # Подпись с датой
-    footer = datetime.now().strftime("%Y-%m-%d")
-    footer_font = ImageFont.truetype(font_path, 32)
-    draw.text((W - 220, H - 80), footer, font=footer_font, fill=(120, 120, 120))
-
-    # Отправляем как фото
-    bio = BytesIO()
-    img.save(bio, format="PNG")
-    bio.seek(0)
-    await msg.reply_photo(photo=bio)
 # =======================
 # MAIN
 # =======================
@@ -731,11 +671,7 @@ def main():
             filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
         )
     )
-    app.add_handler(
-        CommandHandler(
-            ["qshot", "qimg", "quoteimg"],
-            qshot,
-            filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
+
         )
     )
     app.add_handler(CommandHandler("yemek", yemek))
