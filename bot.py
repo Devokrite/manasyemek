@@ -33,7 +33,6 @@ from telegram.ext import (
     filters,
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
 # =======================
 # CONFIG
 # =======================
