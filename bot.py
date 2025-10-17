@@ -672,8 +672,8 @@ def main():
         )
     )
 
-        )
-    )
+        
+    
     app.add_handler(CommandHandler("yemek", yemek))
     # app.add_handler(CommandHandler("start", yemek))  # optional /start alias
 
