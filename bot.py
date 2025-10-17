@@ -665,6 +665,98 @@ async def qshot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Использование: /qshot <текст цитаты>\n"
             "Пока это заглушка. Могу позже заменить на генерацию изображения."
         )
+# --- imports (добавь, если их нет) ---
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
+from datetime import datetime
+from telegram import Update
+from telegram.ext import ContextTypes
+
+# --- /qshot: рендер текста в изображение и отправка фото ---
+async def qshot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+
+    # 1) Собираем текст: приоритет — текст из reply, затем аргументы команды
+    parts = []
+    if msg.reply_to_message:
+        rep = msg.reply_to_message
+        if rep.text:
+            parts.append(rep.text)
+        elif rep.caption:
+            parts.append(rep.caption)
+
+    if context.args:
+        parts.append(" ".join(context.args))
+
+    text = " ".join(parts).strip()
+
+    if not text:
+        await msg.reply_text(
+            "Чтобы сделать карточку:\n"
+            "• Ответьте на сообщение с текстом и напишите /qshot\n"
+            "или\n"
+            "• Используйте: /qshot ваш текст"
+        )
+        return
+
+    # 2) Параметры изображения
+    W, H = 1080, 1350  # формат 4:5
+    bg_color = (245, 245, 245)
+    text_color = (20, 20, 20)
+    pad = 80
+
+    img = Image.new("RGB", (W, H), bg_color)
+    draw = ImageDraw.Draw(img)
+
+    # 3) Шрифты (пытаемся взять DejaVu, иначе дефолт)
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", 56)
+        small = ImageFont.truetype("DejaVuSans.ttf", 36)
+    except:
+        font = ImageFont.load_default()
+        small = ImageFont.load_default()
+
+    # 4) Перенос строк по ширине
+    max_w = W - 2 * pad
+
+    def wrap_text(t: str, f: ImageFont.FreeTypeFont) -> list[str]:
+        words = t.split()
+        lines, cur = [], ""
+        for w in words:
+            candidate = (cur + " " + w).strip()
+            if draw.textlength(candidate, font=f) <= max_w:
+                cur = candidate
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
+        return lines
+
+    lines = wrap_text(text, font)
+
+    # 5) Рисуем текст
+    y = pad
+    line_h = (font.getbbox("Ay")[3] - font.getbbox("Ay")[1]) + 12
+    for line in lines:
+        draw.text((pad, y), line, font=font, fill=text_color)
+        y += line_h
+        if y > H - 2*pad:  # защита от переполнения
+            break
+
+    # 6) Подпись/футер
+    ts = datetime.now().strftime("%Y-%m-%d")
+    footer = ts
+    draw.text((pad, H - pad), footer, font=small, fill=(120, 120, 120))
+
+    # 7) Отправляем как фото
+    bio = BytesIO()
+    img.save(bio, format="PNG")
+    bio.seek(0)
+    await msg.reply_photo(photo=bio)        
 # =======================
 # MAIN
 # =======================
