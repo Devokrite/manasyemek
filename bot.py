@@ -176,7 +176,7 @@ def media_group_for(dishes: list[dict]):
             media.append(InputMediaPhoto(media=d["img"]))  # <-- no caption
     return media
 
-# =======================
+# ======================= ADDED COMMANDS 
 async def say(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
 
@@ -204,6 +204,59 @@ async def say(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text(text)
     else:
         await msg.reply_text("Send `/say <text>` or reply to any message with `/say`.", parse_mode="Markdown")
+        from telegram.ext import CommandHandler, filters
+from telegram.helpers import escape_markdown
+
+async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    chat_id = update.effective_chat.id
+
+    # When replying to a message -> quote that message
+    target = msg.reply_to_message
+    if target:
+        user = target.from_user
+        # text to quote: prefer text, then caption (for photos, etc.)
+        original = target.text or target.caption or ""
+        if not original:
+            original = "(media message)"
+
+        # Build the "who" part
+        if user and user.username:
+            who_raw = f"@{user.username}"
+            who = escape_markdown(who_raw, version=2)
+        else:
+            # fallback: inline mention of the user by id
+            name = escape_markdown(user.full_name if user else "Someone", version=2)
+            who = f"[{name}](tg://user?id={user.id})" if user else name
+
+        # Escape original text for MarkdownV2 and truncate for safety
+        body = escape_markdown(original, version=2)
+        if len(body) > 3500:  # Telegram hard limit is 4096; keep headroom
+            body = body[:3495] + "\\…"
+
+        out = f"{who} said: {body}"
+        await msg.reply_text(out, parse_mode="MarkdownV2", disable_web_page_preview=True)
+        return
+
+    # Not a reply: /quote <text>  -> quote the sender
+    text = " ".join(context.args) if context.args else ""
+    if not text:
+        await msg.reply_text("Reply to a message with /quote, or use:\n/quote <text>")
+        return
+
+    sender = update.effective_user
+    if sender and sender.username:
+        who = escape_markdown(f"@{sender.username}", version=2)
+    else:
+        name = escape_markdown(sender.full_name if sender else "You", version=2)
+        who = f"[{name}](tg://user?id={sender.id})" if sender else name
+
+    body = escape_markdown(text, version=2)
+    if len(body) > 3500:
+        body = body[:3495] + "\\…"
+
+    out = f"{who} said: {body}"
+    await msg.reply_text(out, parse_mode="MarkdownV2", disable_web_page_preview=True)
 # =======================
 # MODERATION HELPERS (mute/unmute)
 # =======================
@@ -483,6 +536,13 @@ def main():
         .job_queue(job_queue)
         .build()
     )
+    app.add_handler(
+    CommandHandler(
+        ["quote", "q"],
+        quote,
+        filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP
+    )
+)
 
     # use /yemek to open the menu
     app.add_handler(CommandHandler("yemek", yemek))
