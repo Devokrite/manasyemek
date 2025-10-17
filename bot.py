@@ -177,7 +177,33 @@ def media_group_for(dishes: list[dict]):
     return media
 
 # =======================
+async def say(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
 
+    # If you reply to a message with /say -> bot re-sends that message as itself
+    if msg.reply_to_message:
+        await context.bot.copy_message(
+            chat_id=msg.chat_id,
+            from_chat_id=msg.chat_id,
+            message_id=msg.reply_to_message.message_id,
+        )
+        return
+
+    # Otherwise, repeat the text after the command
+    text = " ".join(context.args) if context.args else None
+
+    # If user sent "/say something" as a single message, try to strip the command
+    if not text and msg.text:
+        parts = msg.text.split(maxsplit=1)
+        text = parts[1] if len(parts) > 1 else ""
+
+    if text:
+        # Telegram max message length guard
+        if len(text) > 4096:
+            text = text[:4090] + "…"
+        await msg.reply_text(text)
+    else:
+        await msg.reply_text("Send `/say <text>` or reply to any message with `/say`.", parse_mode="Markdown")
 # =======================
 # MODERATION HELPERS (mute/unmute)
 # =======================
@@ -464,7 +490,7 @@ def main():
     # app.add_handler(CommandHandler("start", yemek))
 
     app.add_handler(CommandHandler("debug", debug))
-
+    app.add_handler(CommandHandler(["say", "echo"], say))
     # moderation
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
