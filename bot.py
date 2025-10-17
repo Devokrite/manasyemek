@@ -678,20 +678,16 @@ def main():
             filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
         )
     )
-    # use /yemek to open the menu
     app.add_handler(CommandHandler("yemek", yemek))
-    # if you ALSO want /start, uncomment the next line:
-    # app.add_handler(CommandHandler("start", yemek))
+    # app.add_handler(CommandHandler("start", yemek))  # optional /start alias
 
     app.add_handler(CommandHandler("debug", debug))
     app.add_handler(CommandHandler(["say", "echo"], say))
-    # moderation
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(CallbackQueryHandler(button))
 
     # --- Message handlers ---
-    # Purge text trigger: "-sms 100"
     app.add_handler(
         MessageHandler(
             filters.TEXT & filters.Regex(r"^-sms\s+\d{1,3}$"),
