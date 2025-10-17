@@ -70,6 +70,157 @@ _cache = {"ts": 0.0, "parsed": None, "raw": None}
 # =======================
 # HELPERS
 # =======================
+
+#
+# -------------------------------
+# /quote command (PTB v20+)
+# -------------------------------
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+from telegram import Update
+from telegram.ext import ContextTypes
+
+# If you have a TTF you like, put its path here; otherwise we’ll fall back.
+PRIMARY_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"  # change if needed
+
+def _load_font(size: int):
+    try:
+        return ImageFont.truetype(PRIMARY_FONT_PATH, size=size)
+    except Exception:
+        return ImageFont.load_default()
+
+async def _get_user_avatar(bot, user_id: int, size: int = 160) -> Image.Image:
+    """Fetch user's avatar; return a circular cropped PIL image (RGBA)."""
+    try:
+        photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
+        if photos.total_count > 0:
+            file = await bot.get_file(photos.photos[0][-1].file_id)
+            b = await file.download_as_bytearray()
+            img = Image.open(BytesIO(b)).convert("RGBA")
+        else:
+            raise RuntimeError("no photo")
+    except Exception:
+        # Placeholder avatar (gray circle)
+        img = Image.new("RGBA", (size, size), (200, 200, 200, 255))
+        d = ImageDraw.Draw(img)
+        d.ellipse((0, 0, size-1, size-1), fill=(180, 180, 180, 255))
+
+    # Square crop -> resize -> circle mask
+    img = ImageOps.fit(img, (size, size), method=Image.LANCZOS, centering=(0.5, 0.5))
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
+    img.putalpha(mask)
+    return img
+
+def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+    """Simple greedy wrapper so the text fits the bubble width."""
+    words = text.split()
+    lines, cur = [], ""
+    for w in words:
+        test = (cur + " " + w).strip()
+        if draw.textlength(test, font=font) <= max_width:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return "\n".join(lines) if lines else ""
+
+async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.effective_message
+    bot = context.bot
+
+    # Determine target message and author
+    target = message.reply_to_message
+    if target and (target.text or target.caption):
+        text_to_quote = target.text or target.caption
+        author = target.from_user
+    else:
+        # Use args as text if not replying
+        text_to_quote = " ".join(context.args).strip()
+        author = message.from_user
+
+    if not text_to_quote:
+        await message.reply_text("Reply to a message with /quote or use `/quote your text`.", parse_mode=None)
+        return
+
+    # Canvas settings
+    W, H = 900, 450
+    PADDING = 36
+    AVATAR_SIZE = 160
+    BG = (18, 18, 18, 255)        # background
+    BUBBLE = (28, 28, 28, 255)    # quote bubble
+    WHITE = (245, 245, 245, 255)
+    NAME = (170, 152, 255, 255)   # a soft purple
+    SUBTLE = (200, 200, 200, 255)
+
+    # Fonts
+    font_name = _load_font(44)
+    font_text = _load_font(40)
+    font_meta = _load_font(28)
+
+    # Base image
+    img = Image.new("RGBA", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+
+    # Avatar
+    avatar = await _get_user_avatar(bot, author.id, AVATAR_SIZE)
+    img.paste(avatar, (PADDING, PADDING), avatar)
+
+    # Name + handle line
+    display_name = author.full_name or (author.username and f"@{author.username}") or "Unknown"
+    handle = f"@{author.username}" if author.username else ""
+    text_x = PADDING + AVATAR_SIZE + 24
+    text_y = PADDING
+
+    draw.text((text_x, text_y), display_name, font=font_name, fill=NAME)
+    if handle and handle != display_name:
+        name_w = draw.textlength(display_name + "  ", font=font_name)
+        draw.text((text_x + name_w, text_y + 10), handle, font=font_meta, fill=SUBTLE)
+
+    # Quote bubble
+    bubble_x = text_x
+    bubble_y = text_y + 64
+    bubble_w = W - PADDING - bubble_x
+    bubble_h = H - bubble_y - PADDING
+
+    # Rounded rectangle
+    r = 24
+    bubble = Image.new("RGBA", (bubble_w, bubble_h), (0, 0, 0, 0))
+    bdraw = ImageDraw.Draw(bubble)
+    bdraw.rounded_rectangle((0, 0, bubble_w, bubble_h), radius=r, fill=BUBBLE)
+    img.paste(bubble, (bubble_x, bubble_y), bubble)
+
+    # Quote text (wrapped)
+    inner_pad = 28
+    max_line_width = bubble_w - inner_pad * 2
+    wrapped = _wrap_text(draw, text_to_quote, font_text, max_line_width)
+
+    draw.multiline_text(
+        (bubble_x + inner_pad, bubble_y + inner_pad),
+        wrapped,
+        font=font_text,
+        fill=WHITE,
+        spacing=6
+    )
+
+    # Send as photo
+    bio = BytesIO()
+    bio.name = "quote.png"
+    img.save(bio, format="PNG")
+    bio.seek(0)
+    await bot.send_photo(chat_id=update.effective_chat.id, photo=bio)
+
+# -------------------------------
+# Register the handler
+# -------------------------------
+# from telegram.ext import ApplicationBuilder, CommandHandler
+# app = ApplicationBuilder().token(BOT_TOKEN).build()
+# app.add_handler(CommandHandler("quote", quote, block=False))  # works in groups/DMs
+# app.run_polling()
+
 DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}\s+\S+", re.U)
 
 def tr(text: str) -> str:
@@ -671,6 +822,10 @@ def main():
             filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
         )
     )
+from telegram.ext import ApplicationBuilder, CommandHandler
+ app = ApplicationBuilder().token(BOT_TOKEN).build()
+ app.add_handler(CommandHandler("quote", quote, block=False))  # works in groups/DMs
+ app.run_polling()
 
         
     
