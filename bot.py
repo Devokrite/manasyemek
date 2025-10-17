@@ -647,7 +647,24 @@ async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.delete_message(chat_id=chat.id, message_id=status.message_id)
     except Exception:
         pass
+# --- qshot command stub (safe fallback) ---
+from telegram import Update
+from telegram.ext import ContextTypes
 
+async def qshot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /qshot, /qimg, /quoteimg
+    Временная реализация, чтобы не было NameError.
+    Если хочешь — внутри можно сгенерировать картинку/квоту.
+    """
+    args_text = " ".join(context.args) if context.args else ""
+    if args_text:
+        await update.message.reply_text(f"🖼️ Ваш qshot-текст принят:\n{args_text}\n\n(здесь будет картинка/квота)")
+    else:
+        await update.message.reply_text(
+            "Использование: /qshot <текст цитаты>\n"
+            "Пока это заглушка. Могу позже заменить на генерацию изображения."
+        )
 # =======================
 # MAIN
 # =======================
