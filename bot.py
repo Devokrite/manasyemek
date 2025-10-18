@@ -1009,9 +1009,9 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     META_C = (200,200,200,255)
 
     # MASSIVE sizes to force readability
-    font_name = _q5_pick_font(110)   # display name
-    font_text = _q5_pick_font(104)   # main quote text
-    font_meta = _q5_pick_font(70)    # @handle
+font_name = _q5_pick_font(172)   # username
+font_text = _q5_pick_font(160)   # main quote
+font_meta = _q5_pick_font(104)    # @handle
 
     temp = Image.new("RGBA", (W, 10), BG)
     d0 = ImageDraw.Draw(temp)
@@ -1028,21 +1028,23 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_h = text_bbox[3] - text_bbox[1]
     bubble_h = text_h + inner_pad*2
 
-    header_h = max(AV, int(font_name.size*1.1) + (int(font_meta.size*1.0) if handle else 0))
-    H = PAD + header_h + 36 + bubble_h + PAD
+# Height of the name + (optional) handle ONLY
+name_bbox = d0.textbbox((0,0), display_name, font=font_name)
+name_h = name_bbox[3] - name_bbox[1]
+handle_h = 0
+if handle:
+    hb = d0.textbbox((0,0), handle, font=font_meta)
+    handle_h = hb[3] - hb[1]
 
-    img = Image.new("RGBA", (W, H), BG)
-    draw = ImageDraw.Draw(img)
+GAP_NAME = 20  # gap between handle and bubble
+header_h_name = name_h + (handle_h if handle else 0)
 
-    avatar = await _q5_get_avatar_or_initials(bot, author, AV)
-    img.paste(avatar, (PAD, y_top), avatar)
+# Bubble begins right under name/handle (even if avatar is taller)
+by = y_top + header_h_name + GAP_NAME
 
-    draw.text((x_text, y_top), display_name, font=font_name, fill=NAME_C)
-    if handle and handle != display_name:
-        nm_w = draw.textlength(display_name + "  ", font=font_name)
-        draw.text((x_text + nm_w, y_top + 12), handle, font=font_meta, fill=META_C)
+# Canvas height must fit both the bubble and the avatar
+H = max(by + bubble_h + PAD, PAD + AV + PAD)
 
-    by = y_top + header_h + 36
     r = 42
     bubble = Image.new("RGBA", (bubble_w, bubble_h), (0,0,0,0))
     bdraw = ImageDraw.Draw(bubble)
