@@ -1159,9 +1159,9 @@ async def stickerquote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Canvas + style
-    W = 1600
+    W = 2000
     PAD = 56
-    AV = 320
+    AV = 350
 
     BG = (18, 18, 18, 255)
     BUBBLE = (34, 34, 34, 255)
@@ -1186,10 +1186,14 @@ async def stickerquote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Bubble sizing
     bubble_w = W - PAD - x_text
     inner_pad = 56
-    wrapped = _wrap_text(d0, text_to_quote, font_text, bubble_w - inner_pad * 2)
+
+    content_w = bubble_w - inner_pad * 2
+    wrapped = _wrap_text(d0, text_to_quote, font_text, content_w)
+
     text_bbox = d0.multiline_textbbox((0, 0), wrapped, font=font_text, spacing=18)
     text_h = text_bbox[3] - text_bbox[1]
     bubble_h = text_h + inner_pad * 2
+
 
     # Bubble directly under name/handle (not tied to avatar height)
     name_bbox = d0.textbbox((0, 0), display_name, font=font_name)
@@ -1200,6 +1204,11 @@ async def stickerquote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         handle_h = hb[3] - hb[1]
     GAP_NAME = 20
     by = y_top + name_h + (handle_h if handle else 0) + GAP_NAME
+        # >>> ADD THESE LINES BELOW <<<
+    # Vertical centering of the wrapped text block inside the bubble:
+    y_text_centered = by + (bubble_h - text_h) // 2
+    x_text_start = x_text + inner_pad
+    # >>> END ADD <<<
 
     # Canvas height fits both bubble and avatar
     H = max(by + bubble_h + PAD, PAD + AV + PAD)
