@@ -441,31 +441,68 @@ async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     original = msg.text or ""
-    # normalize both; ё -> е is handled inside _croc_norm
-    text = _croc_norm(original)
+    # normalize overall string (ё->е, lower, strip punct, collapse spaces)
+    text_norm = _croc_norm(original)
 
     g = CROC_GAMES.get(chat.id)
     if not g:
         return
 
     target_raw = g["word"]
-    target = _croc_norm(target_raw)
+    target = _croc_norm(target_raw)  # already maps ё->е
 
-    # If explainer says the word -> warn & ignore
+    # Tokenize normalized message into words (Unicode letters/digits)
+    # Example: "это, наверное, жираф?" -> ["это","наверное","жираф"]
+    words = re.findall(r"\w+", text_norm, flags=re.UNICODE)
+
+    # If explainer says the word -> warn & ignore (standalone word OR full-equal)
     if user.id == g["explainer_id"]:
-        # exact after normalization OR standalone word check on original (ё->е)
-        if (
-            text == target
-            or re.search(
-                rf"(?<!\w){re.escape(target)}(?!\w)",
-                original.lower().replace("ё", "е"),
-            )
-        ):
+        if text_norm == target or target in words:
             try:
                 await msg.reply_text("⚠️ Нельзя произносить слово напрямую — объясняй иначе!")
             except Exception:
                 pass
         return
+
+    # ---- Guess evaluation rules ----
+    # SUCCESS if:
+    # - normalized whole message equals target, OR
+    # - any token equals target (so sentences with the word also count)
+    is_exact = (text_norm == target) or (target in words)
+
+    if is_exact:
+        guesser_name = user.full_name or (user.username and f"@{user.username}") or f"id:{user.id}"
+        _croc_add_points(chat.id, user.id, guesser_name, 1.0)
+        _croc_add_points(chat.id, g["explainer_id"], g["explainer_name"], 0.5)
+        try:
+            await msg.reply_text(
+                f"🎉 Правильно! {guesser_name} угадал слово — *{g['word']}*.\n"
+                f"+1.0 {guesser_name}, +0.5 {g['explainer_name']}.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception:
+            pass
+        CROC_GAMES.pop(chat.id, None)
+        return
+
+    # CLOSE (but not correct): if WHOLE message is Levenshtein distance 1 from target (length >= 4),
+    # OR if ANY token is distance 1 from target (useful when they wrote a sentence around it).
+    close = False
+    if len(target) >= 4:
+        if _levenshtein_leq1(text_norm, target):
+            close = True
+        else:
+            for w in words:
+                if _levenshtein_leq1(w, target):
+                    close = True
+                    break
+
+    if close:
+        try:
+            await msg.reply_text("🔎 Почти! Ты очень близко — проверь одну букву.")
+        except Exception:
+            pass
+    # else: ignore non-matching guesses silently
 
     # ---- Guess evaluation rules ----
     # SUCCESS if:
@@ -1313,9 +1350,8 @@ import unicodedata
 
 def _load_fonts_with_emoji(size: int):
     """
-    Loads base text font (DejaVuSans.ttf) and emoji fallback (AppleColorEmoji.ttf).
-    Put both files in your repo at: ./fonts/DejaVuSans.ttf and ./fonts/AppleColorEmoji.ttf
-    Use a subsetted AppleColorEmoji to keep size small.
+    Loads base text font (DejaVuSans.ttf).
+    Tries AppleColorEmoji.ttf at bitmap strikes; if none works -> emoji_font=None (image fallback).
     """
     base_path = Path(__file__).parent / "fonts" / "DejaVuSans.ttf"
     emoji_path = Path(__file__).parent / "fonts" / "AppleColorEmoji.ttf"
@@ -1324,15 +1360,47 @@ def _load_fonts_with_emoji(size: int):
 
     emoji_font = None
     if emoji_path.exists():
-        try:
-            emoji_font = ImageFont.truetype(str(emoji_path), size=size)
-            print("✅ AppleColorEmoji.ttf loaded successfully")
-        except Exception as e:
-            print(f"⚠️ Could not load AppleColorEmoji.ttf: {e}")
+        STRIKES = [size, 160, 144, 128, 120, 112, 96, 72, 64, 48, 40, 36, 32]
+        last_err = None
+        for s in STRIKES:
+            try:
+                emoji_font = ImageFont.truetype(str(emoji_path), size=s)
+                print(f"✅ AppleColorEmoji.ttf loaded at strike {s}px")
+                break
+            except Exception as e:
+                last_err = e
+        if emoji_font is None:
+            print(f"⚠️ Could not load AppleColorEmoji.ttf at any strike. Using image fallback. Last error: {last_err}")
     else:
-        print("⚠️ Emoji font not found in /fonts/, continuing without it.")
+        print("⚠️ Emoji font not found in /fonts/, using image fallback.")
 
     return base_font, emoji_font
+# --- Twemoji image fallback (CDN + tiny cache) ---
+import requests
+from io import BytesIO
+
+_TWEMOJI_BASE = "https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/"
+_EMOJI_IMG_CACHE = {}  # (cluster, px) -> PIL Image
+
+def _emoji_codepoints(cluster: str) -> str:
+    return "-".join(f"{ord(c):x}" for c in cluster)
+
+def _get_emoji_image(cluster: str, px: int):
+    key = (cluster, px)
+    if key in _EMOJI_IMG_CACHE:
+        return _EMOJI_IMG_CACHE[key]
+    url = f"{_TWEMOJI_BASE}{_emoji_codepoints(cluster)}.png"
+    try:
+        r = requests.get(url, timeout=4)
+        r.raise_for_status()
+        im = Image.open(BytesIO(r.content)).convert("RGBA")
+        if im.size[0] != px:
+            im = im.resize((px, px), Image.LANCZOS)
+    except Exception:
+        im = Image.new("RGBA", (px, px), (0,0,0,0))
+    _EMOJI_IMG_CACHE[key] = im
+    return im
+
 
 # --- Simple grapheme-ish clustering so flags, ZWJ sequences, VS16 hearts render ---
 def _is_ri(cp):   # regional indicator (flags)
@@ -1376,38 +1444,40 @@ def _grapheme_iter(text: str):
 
         yield text[start:i]
 
-def _draw_text_with_emoji(draw: ImageDraw.ImageDraw, x: int, y: int, text: str,
-                          base_font: ImageFont.FreeTypeFont,
-                          emoji_font: ImageFont.FreeTypeFont | None,
-                          fill=(255,255,255,255),
-                          line_spacing=0):
-    """Draw text line-by-line, switching to emoji font for emoji clusters."""
-    lines = text.split("\n")
-    # per-line height from base font
+def _draw_text_with_emoji_any(draw: ImageDraw.ImageDraw, img: Image.Image,
+                              x: int, y: int, text: str,
+                              base_font: ImageFont.FreeTypeFont,
+                              emoji_font: ImageFont.FreeTypeFont | None,
+                              fill=(255,255,255,255),
+                              line_spacing=0):
+    """Draw line-by-line; use emoji_font when available, otherwise paste Twemoji images."""
     bb = base_font.getbbox("Ag")
     line_h = (bb[3] - bb[1]) if bb else int(base_font.size * 1.2)
 
     cursor_y = y
-    for line in lines:
+    for line in text.split("\n"):
         cursor_x = x
         for cluster in _grapheme_iter(line):
-            # detect if cluster contains emoji-ish code points
-            use_emoji = False
-            for ch in cluster:
-                cp = ord(ch)
-                if (
-                    0x1F300 <= cp <= 0x1FAFF or  # main emoji block
-                    0x2600  <= cp <= 0x27BF  or  # misc symbols
-                    0x1F1E6 <= cp <= 0x1F1FF or  # flags
-                    cp == 0xFE0F or cp == 0x200D  # VS16/ZWJ
-                ):
-                    use_emoji = True
-                    break
+            has_emoji = any((
+                0x1F300 <= ord(c) <= 0x1FAFF or
+                0x2600  <= ord(c) <= 0x27BF  or
+                0x1F1E6 <= ord(c) <= 0x1F1FF or
+                ord(c) in (0xFE0F, 0x200D)
+            ) for c in cluster)
 
-            fnt = emoji_font if (emoji_font and use_emoji) else base_font
-            draw.text((cursor_x, cursor_y), cluster, font=fnt, fill=fill, embedded_color=True)
-            cursor_x += draw.textlength(cluster, font=fnt)
-
+            if has_emoji:
+                if emoji_font is not None:
+                    draw.text((cursor_x, cursor_y), cluster, font=emoji_font, fill=fill, embedded_color=True)
+                    cursor_x += draw.textlength(cluster, font=emoji_font)
+                else:
+                    px = base_font.size
+                    emo = _get_emoji_image(cluster, px)
+                    # small baseline nudge so images align with text
+                    img.paste(emo, (int(cursor_x), int(cursor_y - int(px*0.14))), emo)
+                    cursor_x += emo.size[0]
+            else:
+                draw.text((cursor_x, cursor_y), cluster, font=base_font, fill=fill, embedded_color=True)
+                cursor_x += draw.textlength(cluster, font=base_font)
         cursor_y += line_h + line_spacing
 
 # --- tiny word-wrap helper (measure with base font) ---
@@ -1546,16 +1616,17 @@ async def stickerquote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     img.paste(bubble, (x_text, by), bubble)
 
     # Emoji-aware text draw (single call)
-    base_font, emoji_font = _load_fonts_with_emoji(font_text.size)
-    _draw_text_with_emoji(
-        draw,
-        x_text + inner_pad,
-        by + inner_pad,
+    _draw_text_with_emoji_any(
+        draw, img,
+        x_text_start,
+        y_text_centered,
         wrapped,
         base_font=base_font,
         emoji_font=emoji_font,
         fill=TEXT_C,
         line_spacing=18,
+)
+
     )
 
     # Save & send WEBP sticker (≤512 px)
@@ -1722,12 +1793,7 @@ def main():
     app.add_handler(CommandHandler(["say", "echo"], say))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
-# --- your existing commands ---
-    app.add_handler(CommandHandler("yemek", yemek))
-    app.add_handler(CommandHandler("debug", debug))
-    app.add_handler(CommandHandler(["say", "echo"], say))
-    app.add_handler(CommandHandler("mute", mute_cmd))
-    app.add_handler(CommandHandler("unmute", unmute_cmd))
+
 
 # --- Crocodile: add these four BEFORE your generic CallbackQueryHandler(button) ---
     app.add_handler(CommandHandler("croc", croc_cmd))
