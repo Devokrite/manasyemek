@@ -984,28 +984,27 @@ async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
    
-# ---------- /quote v5: Guaranteed TTF + really big text ----------
+# ===================== STICKER QUOTE (emoji-aware, single send) =====================
 from io import BytesIO
 from pathlib import Path
-import os, re, hashlib
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps, features
 from telegram import Update
 from telegram.ext import ContextTypes
 
 # --- Emoji-aware font loader and text drawing helpers ---
-from PIL import ImageFont
-from pathlib import Path
 import unicodedata
 
 def _load_fonts_with_emoji(size: int):
     """
     Loads base text font (DejaVuSans.ttf) and emoji fallback (AppleColorEmoji.ttf).
-    If emoji font missing, returns None for fallback.
+    Put both files in your repo at: ./fonts/DejaVuSans.ttf and ./fonts/AppleColorEmoji.ttf
+    Use a subsetted AppleColorEmoji to keep size small.
     """
     base_path = Path(__file__).parent / "fonts" / "DejaVuSans.ttf"
     emoji_path = Path(__file__).parent / "fonts" / "AppleColorEmoji.ttf"
 
     base_font = ImageFont.truetype(str(base_path), size=size)
+
     emoji_font = None
     if emoji_path.exists():
         try:
@@ -1018,139 +1017,103 @@ def _load_fonts_with_emoji(size: int):
 
     return base_font, emoji_font
 
-# Emoji range detection helper
-_EMOJI_RANGES = [
-    (0x1F300, 0x1FAFF),  # main emoji range
-    (0x2600,  0x27BF),   # misc symbols
-    (0xFE0F,  0xFE0F),   # variation selector
-    (0x1F1E6, 0x1F1FF),  # flags
-    (0x1F3FB, 0x1F3FF),  # skin tones
-    (0x200D,  0x200D),   # joiner
-]
+# --- Simple grapheme-ish clustering so flags, ZWJ sequences, VS16 hearts render ---
+def _is_ri(cp):   # regional indicator (flags)
+    return 0x1F1E6 <= cp <= 0x1F1FF
+def _is_vs16(cp): # variation selector-16
+    return cp == 0xFE0F
+def _is_zwj(cp):  # zero width joiner
+    return cp == 0x200D
 
-def _is_emoji_char(ch: str) -> bool:
-    cp = ord(ch)
-    for a, b in _EMOJI_RANGES:
-        if a <= cp <= b:
-            return True
-    try:
-        return "EMOJI" in unicodedata.name(ch, "")
-    except Exception:
-        return False
+def _grapheme_iter(text: str):
+    """
+    Simple grapheme iterator:
+    - pairs regional indicators for flags
+    - keeps base+VS16 together
+    - keeps ZWJ sequences chained
+    """
+    i, n = 0, len(text)
+    while i < n:
+        start = i
+        cp = ord(text[i])
+
+        # Flag: RI + RI
+        if _is_ri(cp) and i + 1 < n and _is_ri(ord(text[i+1])):
+            yield text[i:i+2]
+            i += 2
+            continue
+
+        # Base + optional VS16
+        i += 1
+        if i < n and _is_vs16(ord(text[i])):
+            i += 1
+
+        # Chain ZWJ sequences: ... + ZWJ + next cluster
+        while i < n and _is_zwj(ord(text[i])):
+            j = i + 1
+            if j < n:
+                j += 1
+                if j < n and _is_vs16(ord(text[j])):
+                    j += 1
+            i = j
+
+        yield text[start:i]
 
 def _draw_text_with_emoji(draw: ImageDraw.ImageDraw, x: int, y: int, text: str,
                           base_font: ImageFont.FreeTypeFont,
                           emoji_font: ImageFont.FreeTypeFont | None,
                           fill=(255,255,255,255),
                           line_spacing=0):
-    """
-    Draws text line-by-line, switching to emoji font for emoji characters.
-    """
+    """Draw text line-by-line, switching to emoji font for emoji clusters."""
     lines = text.split("\n")
+    # per-line height from base font
+    bb = base_font.getbbox("Ag")
+    line_h = (bb[3] - bb[1]) if bb else int(base_font.size * 1.2)
+
     cursor_y = y
     for line in lines:
         cursor_x = x
-        for ch in line:
-            f = emoji_font if (emoji_font and _is_emoji_char(ch)) else base_font
-            draw.text((cursor_x, cursor_y), ch, font=f, fill=fill, embedded_color=True)
-            cursor_x += draw.textlength(ch, font=f)
-        # move down one line
-        bbox = base_font.getbbox("Ag")
-        line_height = (bbox[3] - bbox[1]) if bbox else int(base_font.size * 1.2)
-        cursor_y += line_height + line_spacing
+        for cluster in _grapheme_iter(line):
+            # detect if cluster contains emoji-ish code points
+            use_emoji = False
+            for ch in cluster:
+                cp = ord(ch)
+                if (
+                    0x1F300 <= cp <= 0x1FAFF or  # main emoji block
+                    0x2600  <= cp <= 0x27BF  or  # misc symbols
+                    0x1F1E6 <= cp <= 0x1F1FF or  # flags
+                    cp == 0xFE0F or cp == 0x200D  # VS16/ZWJ
+                ):
+                    use_emoji = True
+                    break
 
+            fnt = emoji_font if (emoji_font and use_emoji) else base_font
+            draw.text((cursor_x, cursor_y), cluster, font=fnt, fill=fill, embedded_color=True)
+            cursor_x += draw.textlength(cluster, font=fnt)
 
-# Try multiple places for a REAL TTF. If none found, we fallback to bundled Pillow path.
-FONT_CANDIDATES = [
-    # 1) project-local font (recommended: put DejaVuSans.ttf here)
-    str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"),
-    str(Path(__file__).parent / "fonts" / "Inter-Regular.ttf"),
-    os.getenv("FONT_PATH") or "",
+        cursor_y += line_h + line_spacing
 
-    # 2) common system locations
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-
-    # 3) typical venv location on Railway/Docker
-    "/app/.venv/lib/python3.11/site-packages/PIL/DejaVuSans.ttf",
-]
-
-from pathlib import Path
-from PIL import ImageFont
-
-def _q5_pick_font(size: int) -> ImageFont.FreeTypeFont:
-    """Always load a real TTF from ./fonts/DejaVuSans.ttf. If missing, raise,
-    so we never silently fall back to tiny bitmap fonts."""
-    local = Path(__file__).parent / "fonts" / "DejaVuSans.ttf"
-    if local.exists():
-        return ImageFont.truetype(str(local), size=size)
-
-    # Fallback: Pillow’s bundled DejaVu (second chance)
-    try:
-        pil_fonts = Path(ImageFont.__file__).parent / "fonts"
-        dejavu = pil_fonts / "DejaVuSans.ttf"
-        if dejavu.exists():
-            return ImageFont.truetype(str(dejavu), size=size)
-    except Exception:
-        pass
-
-    # If we got here, TTF isn’t available. Don’t proceed silently.
-    raise RuntimeError("Missing TTF font. Place DejaVuSans.ttf in ./fonts/ (next to bot.py).")
-
-def _q5_initials(name: str) -> str:
-    parts = re.findall(r"\w+", name, flags=re.UNICODE)
-    if not parts: return "?"
-    if len(parts) == 1: return parts[0][:2].upper()
-    return (parts[0][0] + parts[1][0]).upper()
-
-def _q5_color_from_text(text: str) -> tuple[int,int,int]:
-    h = hashlib.md5(text.encode("utf-8")).hexdigest()
-    r = int(h[0:2], 16); g = int(h[2:4], 16); b = int(h[4:6], 16)
-    return (100 + r % 120, 100 + g % 120, 100 + b % 120)
-
-async def _q5_get_avatar_or_initials(bot, author, size: int) -> Image.Image:
-    # Try real avatar
-    try:
-        photos = await bot.get_user_profile_photos(user_id=author.id, limit=1)
-        if photos.total_count > 0:
-            file = await bot.get_file(photos.photos[0][-1].file_id)
-            b = await file.download_as_bytearray()
-            img = Image.open(BytesIO(b)).convert("RGBA")
-            img = ImageOps.fit(img, (size, size), method=Image.LANCZOS, centering=(0.5, 0.5))
-            m = Image.new("L", (size, size), 0)
-            ImageDraw.Draw(m).ellipse((0, 0, size, size), fill=255)
-            img.putalpha(m)
-            return img
-    except Exception:
-        pass
-    # Fallback: initials circle
-    circle = Image.new("RGBA", (size, size), (0,0,0,0))
-    d = ImageDraw.Draw(circle)
-    bg = _q5_color_from_text(author.full_name or author.username or "user")
-    d.ellipse((0,0,size-1,size-1), fill=bg)
-    f = _q5_pick_font(int(size*0.45))
-    text = _q5_initials(author.full_name or author.username or "?")
-    tw = d.textlength(text, font=f)
-    th = f.getbbox(text)[3] - f.getbbox(text)[1]
-    d.text(((size - tw)/2, (size - th)/2 - 2), text, font=f, fill=(255,255,255,255))
-    return circle
-
-def _q5_wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+# --- tiny word-wrap helper (measure with base font) ---
+def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
     words = text.split()
-    if not words: return ""
+    if not words:
+        return ""
     lines, cur = [], words[0]
     for w in words[1:]:
         if draw.textlength(cur + " " + w, font=font) <= max_width:
             cur += " " + w
         else:
-            lines.append(cur); cur = w
+            lines.append(cur)
+            cur = w
     lines.append(cur)
     return "\n".join(lines)
 
-async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===================== MAIN COMMAND =====================
+async def stickerquote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     bot = context.bot
+
+    # Source: replied message text/caption or args
     target = msg.reply_to_message
     if target and (target.text or target.caption):
         text_to_quote = target.text or target.caption
@@ -1159,10 +1122,10 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text_to_quote = " ".join(context.args).strip()
         author = msg.from_user
     if not text_to_quote:
-        await msg.reply_text("Reply to a message with /quote or use: /quote your text")
+        await msg.reply_text("Reply to a message with /stickerquote or use: /stickerquote your text")
         return
 
-            # IMPORTANT: we render at 1× and use HUGE font sizes, so even if bitmap font is used, it’s legible.
+    # Canvas + style
     W = 1600
     PAD = 56
     AV = 320
@@ -1173,13 +1136,12 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     TEXT_C = (245, 245, 245, 255)
     META_C = (200, 200, 200, 255)
 
-    # MASSIVE sizes to force readability
-    font_name = _q5_pick_font(90)   # username — extremely big
-    font_text = _q5_pick_font(80)   # main quote — extremely big
-    font_meta = _q5_pick_font(60)   # @handle — very big
+    # Fonts (for measuring; emoji-aware fonts are loaded at draw time below)
+    font_name = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=360)
+    font_meta = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=220)
+    font_text = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=320)
 
-
-        # Scratch canvas for measuring
+    # Scratch for measuring
     temp = Image.new("RGBA", (W, 10), BG)
     d0 = ImageDraw.Draw(temp)
 
@@ -1188,36 +1150,60 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     x_text = PAD + AV + 40
     y_top = PAD
 
+    # Bubble sizing
     bubble_w = W - PAD - x_text
     inner_pad = 56
-    wrapped = _q5_wrap(d0, text_to_quote, font_text, bubble_w - inner_pad * 2)
+    wrapped = _wrap_text(d0, text_to_quote, font_text, bubble_w - inner_pad * 2)
     text_bbox = d0.multiline_textbbox((0, 0), wrapped, font=font_text, spacing=18)
     text_h = text_bbox[3] - text_bbox[1]
     bubble_h = text_h + inner_pad * 2
 
-    # Height of the name + (optional) handle ONLY
+    # Bubble directly under name/handle (not tied to avatar height)
     name_bbox = d0.textbbox((0, 0), display_name, font=font_name)
     name_h = name_bbox[3] - name_bbox[1]
     handle_h = 0
     if handle:
         hb = d0.textbbox((0, 0), handle, font=font_meta)
         handle_h = hb[3] - hb[1]
+    GAP_NAME = 20
+    by = y_top + name_h + (handle_h if handle else 0) + GAP_NAME
 
-    GAP_NAME = 20  # gap between handle and bubble
-    header_h_name = name_h + (handle_h if handle else 0)
-
-    # Bubble begins right under name/handle (even if avatar is taller)
-    by = y_top + header_h_name + GAP_NAME
-
-    # Canvas height must fit both the bubble and the avatar
+    # Canvas height fits both bubble and avatar
     H = max(by + bubble_h + PAD, PAD + AV + PAD)
 
-    # === NOW create the base image ===
+    # Base image
     img = Image.new("RGBA", (W, H), BG)
     draw = ImageDraw.Draw(img)
 
-    # Avatar
-    avatar = await _q5_get_avatar_or_initials(bot, author, AV)
+    # Avatar (rounded)
+    async def _avatar(bot, user, size):
+        try:
+            photos = await bot.get_user_profile_photos(user_id=user.id, limit=1)
+            if photos.total_count > 0:
+                file = await bot.get_file(photos.photos[0][-1].file_id)
+                b = await file.download_as_bytearray()
+                im = Image.open(BytesIO(b)).convert("RGBA")
+                im = ImageOps.fit(im, (size, size), method=Image.LANCZOS, centering=(0.5, 0.5))
+                m = Image.new("L", (size, size), 0)
+                ImageDraw.Draw(m).ellipse((0, 0, size, size), fill=255)
+                im.putalpha(m)
+                return im
+        except Exception:
+            pass
+        # fallback circle with initials
+        circ = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(circ)
+        d.ellipse((0, 0, size - 1, size - 1), fill=(96, 96, 160, 255))
+        initials = (author.first_name[:1] if author.first_name else "?") + (author.last_name[:1] if author.last_name else "")
+        initials = initials.strip() or "?"
+        f = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=int(size * 0.45))
+        tw = d.textlength(initials, font=f)
+        tb = f.getbbox(initials)
+        th = tb[3] - tb[1]
+        d.text(((size - tw) / 2, (size - th) / 2 - 2), initials, font=f, fill=(255, 255, 255, 255))
+        return circ
+
+    avatar = await _avatar(bot, author, AV)
     img.paste(avatar, (PAD, y_top), avatar)
 
     # Name + handle
@@ -1226,14 +1212,14 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         nm_w = draw.textlength(display_name + "  ", font=font_name)
         draw.text((x_text + nm_w, y_top + 12), handle, font=font_meta, fill=META_C)
 
-        # Quote bubble
+    # Bubble
     r = 42
     bubble = Image.new("RGBA", (bubble_w, bubble_h), (0, 0, 0, 0))
     bdraw = ImageDraw.Draw(bubble)
     bdraw.rounded_rectangle((0, 0, bubble_w, bubble_h), radius=r, fill=BUBBLE)
     img.paste(bubble, (x_text, by), bubble)
 
-    # --- Draw emoji-aware text (replaces draw.multiline_text(...)) ---
+    # Emoji-aware text draw (single call)
     base_font, emoji_font = _load_fonts_with_emoji(font_text.size)
     _draw_text_with_emoji(
         draw,
@@ -1246,20 +1232,17 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         line_spacing=18,
     )
 
-    # === Save & send as WEBP sticker ===
-    from PIL import features
+    # Save & send WEBP sticker (≤512 px)
     try:
         print("WEBP support:", features.check("webp"))
     except Exception:
         pass
 
-    # Ensure ≤512px on the longest side
     max_side = 512
     w, h = img.size
     scale = min(max_side / w, max_side / h, 1)
     if scale < 1:
         img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGBA")
 
@@ -1269,42 +1252,11 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bio.seek(0)
 
     await bot.send_sticker(chat_id=update.effective_chat.id, sticker=bio)
+# ===================== END STICKER QUOTE =====================
 
+# Add this in main():
+# app.add_handler(CommandHandler("stickerquote", stickerquote))
 
-    # Quote text
-# --- Draw emoji-aware text ---
-    base_font, emoji_font = _load_fonts_with_emoji(font_text.size)
-    _draw_text_with_emoji(
-        draw,
-        x_text + inner_pad,
-        by + inner_pad,
-        wrapped,
-        base_font=base_font,
-        emoji_font=emoji_font,
-        fill=TEXT_C,
-        line_spacing=18,
-)
-
-    
-
-    # === Save as WEBP sticker ===
-    bio = BytesIO()
-    bio.name = "quote.webp"
-    # Resize safely to Telegram sticker size limit (max 512x512)
-    max_side = 512
-    w, h = img.size
-    scale = min(max_side / w, max_side / h, 1)
-    if scale < 1:
-        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-
-    img.save(bio, format="WEBP", lossless=True)
-    bio.seek(0)
-
-    # Send as sticker instead of photo
-    await bot.send_sticker(chat_id=update.effective_chat.id, sticker=bio)
-
-
-# ---------- end /quote v5 ----------
 import random
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -1393,6 +1345,7 @@ def main():
     app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(CommandHandler("predict", predict))
+    app.add_handler(CommandHandler("stickerquote", stickerquote))
     app.add_handler(
         MessageHandler(
             filters.TEXT & filters.Regex(r"^-sms\s+\d{1,3}$"),
