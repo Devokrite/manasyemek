@@ -914,15 +914,17 @@ FONT_CANDIDATES = [
     "/app/.venv/lib/python3.11/site-packages/PIL/DejaVuSans.ttf",
 ]
 
+from pathlib import Path
+from PIL import ImageFont
+
 def _q5_pick_font(size: int) -> ImageFont.FreeTypeFont:
-    # A) project/system fonts
-    for p in FONT_CANDIDATES:
-        if p and os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size=size)
-            except Exception:
-                pass
-    # B) Pillow’s bundled DejaVu
+    """Always load a real TTF from ./fonts/DejaVuSans.ttf. If missing, raise,
+    so we never silently fall back to tiny bitmap fonts."""
+    local = Path(__file__).parent / "fonts" / "DejaVuSans.ttf"
+    if local.exists():
+        return ImageFont.truetype(str(local), size=size)
+
+    # Fallback: Pillow’s bundled DejaVu (second chance)
     try:
         pil_fonts = Path(ImageFont.__file__).parent / "fonts"
         dejavu = pil_fonts / "DejaVuSans.ttf"
@@ -930,8 +932,9 @@ def _q5_pick_font(size: int) -> ImageFont.FreeTypeFont:
             return ImageFont.truetype(str(dejavu), size=size)
     except Exception:
         pass
-    # C) last resort (tiny bitmap). We’ll compensate by drawing HUGE and NOT downscaling.
-    return ImageFont.load_default()
+
+    # If we got here, TTF isn’t available. Don’t proceed silently.
+    raise RuntimeError("Missing TTF font. Place DejaVuSans.ttf in ./fonts/ (next to bot.py).")
 
 def _q5_initials(name: str) -> str:
     parts = re.findall(r"\w+", name, flags=re.UNICODE)
