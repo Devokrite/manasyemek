@@ -1013,6 +1013,7 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     font_text = _q5_pick_font(160)   # main quote
     font_meta = _q5_pick_font(104)   # @handle
 
+        # Scratch canvas for measuring
     temp = Image.new("RGBA", (W, 10), BG)
     d0 = ImageDraw.Draw(temp)
 
@@ -1039,18 +1040,34 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     GAP_NAME = 20  # gap between handle and bubble
     header_h_name = name_h + (handle_h if handle else 0)
 
-# Bubble begins right under name/handle (even if avatar is taller)
+    # Bubble begins right under name/handle (even if avatar is taller)
     by = y_top + header_h_name + GAP_NAME
-    
-# Canvas height must fit both the bubble and the avatar
+
+    # Canvas height must fit both the bubble and the avatar
     H = max(by + bubble_h + PAD, PAD + AV + PAD)
-    
+
+    # === NOW create the base image ===
+    img = Image.new("RGBA", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+
+    # Avatar
+    avatar = await _q5_get_avatar_or_initials(bot, author, AV)
+    img.paste(avatar, (PAD, y_top), avatar)
+
+    # Name + handle
+    draw.text((x_text, y_top), display_name, font=font_name, fill=NAME_C)
+    if handle and handle != display_name:
+        nm_w = draw.textlength(display_name + "  ", font=font_name)
+        draw.text((x_text + nm_w, y_top + 12), handle, font=font_meta, fill=META_C)
+
+    # Quote bubble
     r = 42
-    bubble = Image.new("RGBA", (bubble_w, bubble_h), (0,0,0,0))
+    bubble = Image.new("RGBA", (bubble_w, bubble_h), (0, 0, 0, 0))
     bdraw = ImageDraw.Draw(bubble)
-    bdraw.rounded_rectangle((0,0,bubble_w,bubble_h), radius=r, fill=BUBBLE)
+    bdraw.rounded_rectangle((0, 0, bubble_w, bubble_h), radius=r, fill=BUBBLE)
     img.paste(bubble, (x_text, by), bubble)
 
+    # Quote text
     draw.multiline_text(
         (x_text + inner_pad, by + inner_pad),
         wrapped,
