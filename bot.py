@@ -71,6 +71,7 @@ BOT_TOKEN = "7681582309:AAF8Zv0nNkV50LviL0gU1pusj8egDbE9_mw"   # <-- your token
 BASE_URL = "https://beslenme.manas.edu.kg"
 MENU_URL = f"{BASE_URL}/menu"
 BISHKEK_TZ = pytz_timezone("Asia/Bishkek")
+OWNER_IDS = {838410534}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("manas_menu_bot")
@@ -622,6 +623,48 @@ def build_unmute_permissions() -> ChatPermissions:
         can_send_other_messages=True,
         can_add_web_page_previews=True,
     )
+# --- Admin gate helper (put after build_unmute_permissions) ---
+async def _require_admin(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    need_right: str | None = None,   # e.g. "can_delete_messages" or "can_restrict_members"
+) -> bool:
+    """Return True if caller is:
+       - in OWNER_IDS (explicit allowed users), OR
+       - the anonymous admin posting as the chat itself, OR
+       - a chat admin/creator (and has need_right if specified).
+    """
+    msg = update.effective_message
+    chat = update.effective_chat
+
+    # 0) If sender is one of the owner IDs, allow immediately
+    user = update.effective_user
+    if user and getattr(user, "id", None) in globals().get("OWNER_IDS", set()):
+        return True
+
+    # 1) Anonymous admin mode: Telegram hides the user; allow if message is sent as the chat itself
+    if getattr(msg, "sender_chat", None) and msg.sender_chat.id == chat.id:
+        return True
+
+    # 2) If no user (should be rare), deny
+    if not user:
+        return False
+
+    try:
+        member = await context.bot.get_chat_member(chat.id, user.id)
+    except Exception:
+        return False
+
+    # 3) Must be an admin or creator
+    if member.status not in ("administrator", "creator"):
+        return False
+
+    # 4) If a specific permission is required, creators bypass; admins must have it.
+    if need_right and member.status != "creator":
+        return bool(getattr(member, need_right, False))
+
+    return True
+
 
 async def _resolve_target_from_message(msg):
     # Prefer reply
@@ -646,6 +689,12 @@ async def _resolve_target_from_message(msg):
 async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     chat = update.effective_chat
+        # Caller must be admin with "Restrict members"
+    ok = await _require_admin(update, context, need_right="can_restrict_members")
+    if not ok:
+        await msg.reply_text("Only admins with the 'Restrict members' permission can use this.")
+        return
+
 
     if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         await msg.reply_text("This command works only in groups.")
@@ -679,6 +728,11 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     chat = update.effective_chat
+    ok = await _require_admin(update, context, need_right="can_restrict_members")
+    if not ok:
+        await msg.reply_text("Only admins with the 'Restrict members' permission can use this.")
+        return
+
 
     if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         await msg.reply_text("This command works only in groups.")
@@ -780,6 +834,11 @@ async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     chat = update.effective_chat
     text = msg.text or msg.caption or ""
+        # Admin check: must be admin and have "Delete messages"
+    ok = await _require_admin(update, context, need_right="can_delete_messages")
+    if not ok:
+        await msg.reply_text("Only admins with the 'Delete messages' permission can use this.")
+        return
 
     m = SMS_REGEX.match(text.strip())
     if not m:
@@ -854,13 +913,33 @@ FONT_PATHS = [
     "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
 ]
 
+from pathlib import Path  # add this near the imports if it’s not already there
+
 def _pick_font(size: int):
-    for p in FONT_PATHS:
+    # 1) Use Pillow's bundled DejaVu (supports Cyrillic and always exists)
+    try:
+        pil_fonts = Path(ImageFont.__file__).parent / "fonts"
+        dejavu = pil_fonts / "DejaVuSans.ttf"
+        if dejavu.exists():
+            return ImageFont.truetype(str(dejavu), size=size)
+    except Exception:
+        pass
+
+    # 2) Try common system fonts
+    for p in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ):
         if os.path.exists(p):
             try:
                 return ImageFont.truetype(p, size=size)
             except Exception:
-                pass
+                continue
+
+    # 3) Fallback (tiny bitmap font)
+    return ImageFont.load_default()
+
     return ImageFont.load_default()
 
 def _initials(name: str) -> str:
