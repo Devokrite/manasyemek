@@ -73,8 +73,73 @@ MENU_URL = f"{BASE_URL}/menu"
 BISHKEK_TZ = pytz_timezone("Asia/Bishkek")
 OWNER_IDS = {838410534}
 
+
+# ===== Crocodile Game CONFIG =====
+CROC_WORDS = [
+    "Айдан","Бакай","Саид","Айдар","Жайдар","Салат","Саламат",
+    "Саадат","Адинай","Кайрат","Кокос","Матиза","Матиз",
+    "Дымка","Краат","Укук","Фараон","Акжол","Турец",
+    "Манас","Бункер","Холера","Чума","Мороженщица","склероз",
+    "саксофон","перекрёсток","конфетти","парашют","ишлетме","дракон",
+]
+CROC_SCORES_FILE = Path("croc_scores.json")
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("manas_menu_bot")
+
+
+
+
+# ====== Croc state ======
+CROC_GAMES: dict[int, dict] = {}           # chat_id -> {explainer_id, explainer_name, word, used:set[str]}
+CROC_LOCKS: dict[int, asyncio.Lock] = {}   # per-chat lock
+CROC_SCORES: dict[str, dict[str, dict]] = {}  # {"chat_id": {"user_id": {"name": str, "points": float}}}
+
+def _croc_lock(chat_id: int) -> asyncio.Lock:
+    if chat_id not in CROC_LOCKS:
+        CROC_LOCKS[chat_id] = asyncio.Lock()
+    return CROC_LOCKS[chat_id]
+
+def _croc_pick_word(chat_id: int) -> str:
+    used = CROC_GAMES.get(chat_id, {}).get("used", set())
+    pool = [w for w in CROC_WORDS if w not in used] or CROC_WORDS[:]
+    return random.choice(pool)
+
+def _croc_norm(s: str) -> str:
+    return " ".join((s or "").strip().lower().split()).strip("«»„“”’'\"—–-.,!?;:")
+
+def _croc_add_points(chat_id: int, user_id: int, name: str, pts: float):
+    c = str(chat_id); u = str(user_id)
+    CROC_SCORES.setdefault(c, {})
+    CROC_SCORES[c].setdefault(u, {"name": name, "points": 0.0})
+    CROC_SCORES[c][u]["name"] = name
+    CROC_SCORES[c][u]["points"] = float(CROC_SCORES[c][u]["points"]) + float(pts)
+    try:
+        with open(CROC_SCORES_FILE, "w", encoding="utf-8") as f:
+            json.dump(CROC_SCORES, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log.error(f"[CROC] save scores failed: {e}")
+
+def _croc_load_scores():
+    global CROC_SCORES
+    if CROC_SCORES_FILE.exists():
+        try:
+            CROC_SCORES = json.load(open(CROC_SCORES_FILE, "r", encoding="utf-8"))
+        except Exception:
+            CROC_SCORES = {}
+
+def _croc_board(chat_id: int) -> str:
+    c = str(chat_id)
+    if not CROC_SCORES.get(c):
+        return "Пока нет очков. Запустите раунд: /croc ✨"
+    arr = [(v["points"], v["name"]) for v in CROC_SCORES[c].values()]
+    arr.sort(key=lambda x: x[0], reverse=True)
+    lines = ["🏆 *Рейтинг чата:*"]
+    for i, (pts, name) in enumerate(arr[:15], start=1):
+        lines.append(f"{i}. {name} — *{pts:.1f}*")
+    return "\n".join(lines)
+
 # ===== PREDICTIONS CONFIG (hard-coded) =====
 # Map Telegram user_id -> real name (in Russian). Fill your people here:
 REAL_NAMES: dict[int, str] = {
@@ -262,6 +327,142 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text_to_quote:
         await message.reply_text("Reply to a message with /quote or use `/quote your text`.", parse_mode=None)
         return
+        from telegram.ext import CallbackQueryHandler  # you already have; just ensure it’s imported
+
+CROC_CB_PREFIX = "croc:"  # callback data prefix
+
+async def croc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await msg.reply_text("Команду /croc нужно вызывать в группе.")
+        return
+
+    lock = _croc_lock(chat.id)
+    async with lock:
+        if chat.id in CROC_GAMES:
+            g = CROC_GAMES[chat.id]
+            await msg.reply_text(f"Уже идёт раунд. Объясняет: {g['explainer_name']}.\nНажмите *Показать слово* под сообщением.", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        word = _croc_pick_word(chat.id)
+        CROC_GAMES[chat.id] = {
+            "explainer_id": user.id,
+            "explainer_name": user.full_name or (user.username and f"@{user.username}") or f"id:{user.id}",
+            "word": word,
+            "used": {word},
+        }
+
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔐 Показать слово", callback_data=f"{CROC_CB_PREFIX}show:{chat.id}:{user.id}"),
+        InlineKeyboardButton("⏭ Пропустить", callback_data=f"{CROC_CB_PREFIX}skip:{chat.id}:{user.id}"),
+        InlineKeyboardButton("🛑 Завершить", callback_data=f"{CROC_CB_PREFIX}end:{chat.id}:{user.id}"),
+    ]])
+
+    await msg.reply_text(
+        f"🎬 Раунд начался! Объясняет: *{CROC_GAMES[chat.id]['explainer_name']}*\n"
+        f"Угадывайте слово в чате. Первые получают очки.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb,
+    )
+
+async def croc_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer(cache_time=0)  # we’ll re-answer with alert below if needed
+
+    try:
+        action, chat_id_s, explainer_id_s = q.data.split(":")[1:]
+        chat_id = int(chat_id_s)
+        explainer_id = int(explainer_id_s)
+    except Exception:
+        return
+
+    # Only the explainer may press these buttons
+    if not q.from_user or q.from_user.id != explainer_id:
+        await q.answer("Только объясняющий может пользоваться этими кнопками.", show_alert=True)
+        return
+
+    lock = _croc_lock(chat_id)
+    async with lock:
+        g = CROC_GAMES.get(chat_id)
+        if not g or g.get("explainer_id") != explainer_id:
+            await q.answer("Раунд уже не активен.", show_alert=True)
+            return
+
+        if action == "show":
+            await q.answer(text=f"ТВОЁ СЛОВО:\n\n{g['word']}", show_alert=True)
+            return
+
+        if action == "skip":
+            new_word = _croc_pick_word(chat_id)
+            g["word"] = new_word
+            g["used"].add(new_word)
+            await q.answer(text=f"НОВОЕ СЛОВО:\n\n{new_word}", show_alert=True)
+            try:
+                await q.edit_message_reply_markup(reply_markup=q.message.reply_markup)
+            except Exception:
+                pass
+            return
+
+        if action == "end":
+            CROC_GAMES.pop(chat_id, None)
+            await q.answer("Раунд завершён.", show_alert=True)
+            try:
+                await q.message.reply_text("🛑 Раунд завершён организатором.")
+            except Exception:
+                pass
+            return
+
+async def croc_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await update.effective_message.reply_text("Рейтинг доступен только в группе.")
+        return
+    await update.effective_message.reply_text(_croc_board(chat.id), parse_mode=ParseMode.MARKDOWN)
+
+async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+    if not msg or not msg.text:
+        return
+
+    text = _croc_norm(msg.text)
+    lock = _croc_lock(chat.id)
+    async with lock:
+        g = CROC_GAMES.get(chat.id)
+        if not g:
+            return
+        target = _croc_norm(g["word"])
+
+        # if explainer says the word -> warn & ignore
+        if user.id == g["explainer_id"] and text == target:
+            try:
+                await msg.reply_text("⚠️ Нельзя произносить слово напрямую — объясняй иначе!")
+            except Exception:
+                pass
+            return
+
+        # correct guess by anyone else
+        if text == target and user.id != g["explainer_id"]:
+            guesser_name = user.full_name or (user.username and f"@{user.username}") or f"id:{user.id}"
+            _croc_add_points(chat.id, user.id, guesser_name, 1.0)
+            _croc_add_points(chat.id, g["explainer_id"], g["explainer_name"], 0.5)
+            try:
+                await msg.reply_text(
+                    f"🎉 Правильно! {guesser_name} угадал слово — *{g['word']}*.\n"
+                    f"+1.0 {guesser_name}, +0.5 {g['explainer_name']}.",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+            except Exception:
+                pass
+            CROC_GAMES.pop(chat.id, None)
+            return
+
 
     # Canvas settings
     W, H = 900, 450
@@ -1388,6 +1589,11 @@ def main():
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("stickerquote", stickerquote))
+    app.add_handler(CommandHandler("croc", croc_cmd))
+    app.add_handler(CommandHandler("rating", croc_rating))
+    app.add_handler(CallbackQueryHandler(croc_callback, pattern=r"^croc:"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, croc_group_listener))
+
     app.add_handler(
         MessageHandler(
             filters.TEXT & filters.Regex(r"^-sms\s+\d{1,3}$"),
