@@ -890,7 +890,7 @@ async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
    
-# ---------- /quote v4: Big, crisp text & bundled font ----------
+# ---------- /quote v5: Guaranteed TTF + really big text ----------
 from io import BytesIO
 from pathlib import Path
 import os, re, hashlib
@@ -898,8 +898,31 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from telegram import Update
 from telegram.ext import ContextTypes
 
-def _q4_pick_font(size: int) -> ImageFont.FreeTypeFont:
-    # 1) Pillow’s bundled DejaVu (supports Cyrillic/Latin; ships with Pillow)
+# Try multiple places for a REAL TTF. If none found, we fallback to bundled Pillow path.
+FONT_CANDIDATES = [
+    # 1) project-local font (recommended: put DejaVuSans.ttf here)
+    str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"),
+    str(Path(__file__).parent / "fonts" / "Inter-Regular.ttf"),
+    os.getenv("FONT_PATH") or "",
+
+    # 2) common system locations
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+
+    # 3) typical venv location on Railway/Docker
+    "/app/.venv/lib/python3.11/site-packages/PIL/DejaVuSans.ttf",
+]
+
+def _q5_pick_font(size: int) -> ImageFont.FreeTypeFont:
+    # A) project/system fonts
+    for p in FONT_CANDIDATES:
+        if p and os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size=size)
+            except Exception:
+                pass
+    # B) Pillow’s bundled DejaVu
     try:
         pil_fonts = Path(ImageFont.__file__).parent / "fonts"
         dejavu = pil_fonts / "DejaVuSans.ttf"
@@ -907,34 +930,21 @@ def _q4_pick_font(size: int) -> ImageFont.FreeTypeFont:
             return ImageFont.truetype(str(dejavu), size=size)
     except Exception:
         pass
-    # 2) Common system fonts (just in case)
-    for p in (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-    ):
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size=size)
-            except Exception:
-                continue
-    # 3) Last resort (tiny, but we really shouldn’t hit this anymore)
+    # C) last resort (tiny bitmap). We’ll compensate by drawing HUGE and NOT downscaling.
     return ImageFont.load_default()
 
-def _q4_initials(name: str) -> str:
+def _q5_initials(name: str) -> str:
     parts = re.findall(r"\w+", name, flags=re.UNICODE)
-    if not parts:
-        return "?"
-    if len(parts) == 1:
-        return parts[0][:2].upper()
+    if not parts: return "?"
+    if len(parts) == 1: return parts[0][:2].upper()
     return (parts[0][0] + parts[1][0]).upper()
 
-def _q4_color_from_text(text: str) -> tuple[int,int,int]:
+def _q5_color_from_text(text: str) -> tuple[int,int,int]:
     h = hashlib.md5(text.encode("utf-8")).hexdigest()
     r = int(h[0:2], 16); g = int(h[2:4], 16); b = int(h[4:6], 16)
     return (100 + r % 120, 100 + g % 120, 100 + b % 120)
 
-async def _q4_get_avatar_or_initials(bot, author, size: int) -> Image.Image:
+async def _q5_get_avatar_or_initials(bot, author, size: int) -> Image.Image:
     # Try real avatar
     try:
         photos = await bot.get_user_profile_photos(user_id=author.id, limit=1)
@@ -952,16 +962,16 @@ async def _q4_get_avatar_or_initials(bot, author, size: int) -> Image.Image:
     # Fallback: initials circle
     circle = Image.new("RGBA", (size, size), (0,0,0,0))
     d = ImageDraw.Draw(circle)
-    bg = _q4_color_from_text(author.full_name or author.username or "user")
+    bg = _q5_color_from_text(author.full_name or author.username or "user")
     d.ellipse((0,0,size-1,size-1), fill=bg)
-    f = _q4_pick_font(int(size*0.45))
-    text = _q4_initials(author.full_name or author.username or "?")
+    f = _q5_pick_font(int(size*0.45))
+    text = _q5_initials(author.full_name or author.username or "?")
     tw = d.textlength(text, font=f)
     th = f.getbbox(text)[3] - f.getbbox(text)[1]
     d.text(((size - tw)/2, (size - th)/2 - 2), text, font=f, fill=(255,255,255,255))
     return circle
 
-def _q4_wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+def _q5_wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
     words = text.split()
     if not words: return ""
     lines, cur = [], words[0]
@@ -987,11 +997,10 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("Reply to a message with /quote or use: /quote your text")
         return
 
-    # Big + crisp settings
-    SCALE = 2
-    W = 1200 * SCALE
-    PAD = 48 * SCALE
-    AV = 220 * SCALE
+    # IMPORTANT: we render at 1× and use HUGE font sizes, so even if bitmap font is used, it’s legible.
+    W = 1600
+    PAD = 56
+    AV = 320
 
     BG = (18,18,18,255)
     BUBBLE = (34,34,34,255)
@@ -999,45 +1008,42 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     TEXT_C = (245,245,245,255)
     META_C = (200,200,200,255)
 
-    font_name = _q4_pick_font(80 * SCALE)   # much bigger
-    font_text = _q4_pick_font(78 * SCALE)   # much bigger
-    font_meta = _q4_pick_font(50 * SCALE)
+    # MASSIVE sizes to force readability
+    font_name = _q5_pick_font(110)   # display name
+    font_text = _q5_pick_font(104)   # main quote text
+    font_meta = _q5_pick_font(70)    # @handle
 
-    # Pre-measure for dynamic height
     temp = Image.new("RGBA", (W, 10), BG)
     d0 = ImageDraw.Draw(temp)
 
     display_name = author.full_name or (author.username and f"@{author.username}") or "Unknown"
     handle = f"@{author.username}" if author.username else ""
-    x_text = PAD + AV + (32 * SCALE)
+    x_text = PAD + AV + 40
     y_top = PAD
 
     bubble_w = W - PAD - x_text
-    inner_pad = 44 * SCALE
-    wrapped = _q4_wrap(d0, text_to_quote, font_text, bubble_w - inner_pad*2)
-    text_bbox = d0.multiline_textbbox((0,0), wrapped, font=font_text, spacing=14 * SCALE)
+    inner_pad = 56
+    wrapped = _q5_wrap(d0, text_to_quote, font_text, bubble_w - inner_pad*2)
+    text_bbox = d0.multiline_textbbox((0,0), wrapped, font=font_text, spacing=18)
     text_h = text_bbox[3] - text_bbox[1]
     bubble_h = text_h + inner_pad*2
 
     header_h = max(AV, int(font_name.size*1.1) + (int(font_meta.size*1.0) if handle else 0))
-    H = PAD + header_h + (28 * SCALE) + bubble_h + PAD
+    H = PAD + header_h + 36 + bubble_h + PAD
 
     img = Image.new("RGBA", (W, H), BG)
     draw = ImageDraw.Draw(img)
 
-    # Avatar
-    avatar = await _q4_get_avatar_or_initials(bot, author, AV)
+    avatar = await _q5_get_avatar_or_initials(bot, author, AV)
     img.paste(avatar, (PAD, y_top), avatar)
 
-    # Name + handle
     draw.text((x_text, y_top), display_name, font=font_name, fill=NAME_C)
     if handle and handle != display_name:
         nm_w = draw.textlength(display_name + "  ", font=font_name)
-        draw.text((x_text + nm_w, y_top + 10 * SCALE), handle, font=font_meta, fill=META_C)
+        draw.text((x_text + nm_w, y_top + 12), handle, font=font_meta, fill=META_C)
 
-    # Bubble
-    by = y_top + header_h + (28 * SCALE)
-    r = 36 * SCALE
+    by = y_top + header_h + 36
+    r = 42
     bubble = Image.new("RGBA", (bubble_w, bubble_h), (0,0,0,0))
     bdraw = ImageDraw.Draw(bubble)
     bdraw.rounded_rectangle((0,0,bubble_w,bubble_h), radius=r, fill=BUBBLE)
@@ -1048,15 +1054,13 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wrapped,
         font=font_text,
         fill=TEXT_C,
-        spacing=14 * SCALE,
+        spacing=18,
     )
 
-    # Downscale to final
-    out_img = img.resize((W//SCALE, H//SCALE), Image.LANCZOS)
     bio = BytesIO(); bio.name = "quote.png"
-    out_img.save(bio, format="PNG"); bio.seek(0)
+    img.save(bio, format="PNG"); bio.seek(0)
     await bot.send_photo(chat_id=update.effective_chat.id, photo=bio)
-# ---------- end /quote v4 ----------
+# ---------- end /quote v5 ----------
 
 
 
