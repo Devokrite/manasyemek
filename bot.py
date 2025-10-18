@@ -1627,7 +1627,7 @@ async def stickerquote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         line_spacing=18,
 )
 
-    )
+    
 
     # Save & send WEBP sticker (≤512 px)
     try:
