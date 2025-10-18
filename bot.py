@@ -1285,7 +1285,7 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         line_spacing=18,
 )
 
-    )
+    
 
     # === Save as WEBP sticker ===
     bio = BytesIO()
