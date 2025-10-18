@@ -1009,9 +1009,10 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     META_C = (200, 200, 200, 255)
 
     # MASSIVE sizes to force readability
-    font_name = _q5_pick_font(172)   # username
-    font_text = _q5_pick_font(160)   # main quote
-    font_meta = _q5_pick_font(104)   # @handle
+    font_name = _q5_pick_font(520)   # username — extremely big
+    font_text = _q5_pick_font(480)   # main quote — extremely big
+    font_meta = _q5_pick_font(300)   # @handle — very big
+
 
         # Scratch canvas for measuring
     temp = Image.new("RGBA", (W, 10), BG)
