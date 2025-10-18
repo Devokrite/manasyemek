@@ -1029,22 +1029,22 @@ font_meta = _q5_pick_font(104)    # @handle
     bubble_h = text_h + inner_pad*2
 
 # Height of the name + (optional) handle ONLY
-name_bbox = d0.textbbox((0,0), display_name, font=font_name)
-name_h = name_bbox[3] - name_bbox[1]
-handle_h = 0
-if handle:
+    name_bbox = d0.textbbox((0,0), display_name, font=font_name)
+    name_h = name_bbox[3] - name_bbox[1]
+    handle_h = 0
+    if handle:
     hb = d0.textbbox((0,0), handle, font=font_meta)
     handle_h = hb[3] - hb[1]
 
-GAP_NAME = 20  # gap between handle and bubble
-header_h_name = name_h + (handle_h if handle else 0)
+    GAP_NAME = 20  # gap between handle and bubble
+    header_h_name = name_h + (handle_h if handle else 0)
 
 # Bubble begins right under name/handle (even if avatar is taller)
-by = y_top + header_h_name + GAP_NAME
-
+    by = y_top + header_h_name + GAP_NAME
+    
 # Canvas height must fit both the bubble and the avatar
-H = max(by + bubble_h + PAD, PAD + AV + PAD)
-
+    H = max(by + bubble_h + PAD, PAD + AV + PAD)
+    
     r = 42
     bubble = Image.new("RGBA", (bubble_w, bubble_h), (0,0,0,0))
     bdraw = ImageDraw.Draw(bubble)
