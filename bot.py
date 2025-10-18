@@ -992,6 +992,74 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from telegram import Update
 from telegram.ext import ContextTypes
 
+# --- Emoji-aware font loader and text drawing helpers ---
+from PIL import ImageFont
+from pathlib import Path
+import unicodedata
+
+def _load_fonts_with_emoji(size: int):
+    """
+    Loads base text font (DejaVuSans.ttf) and emoji fallback (AppleColorEmoji.ttf).
+    If emoji font missing, returns None for fallback.
+    """
+    base_path = Path(__file__).parent / "fonts" / "DejaVuSans.ttf"
+    emoji_path = Path(__file__).parent / "fonts" / "AppleColorEmoji.ttf"
+
+    base_font = ImageFont.truetype(str(base_path), size=size)
+    emoji_font = None
+    if emoji_path.exists():
+        try:
+            emoji_font = ImageFont.truetype(str(emoji_path), size=size)
+            print("✅ AppleColorEmoji.ttf loaded successfully")
+        except Exception as e:
+            print(f"⚠️ Could not load AppleColorEmoji.ttf: {e}")
+    else:
+        print("⚠️ Emoji font not found in /fonts/, continuing without it.")
+
+    return base_font, emoji_font
+
+# Emoji range detection helper
+_EMOJI_RANGES = [
+    (0x1F300, 0x1FAFF),  # main emoji range
+    (0x2600,  0x27BF),   # misc symbols
+    (0xFE0F,  0xFE0F),   # variation selector
+    (0x1F1E6, 0x1F1FF),  # flags
+    (0x1F3FB, 0x1F3FF),  # skin tones
+    (0x200D,  0x200D),   # joiner
+]
+
+def _is_emoji_char(ch: str) -> bool:
+    cp = ord(ch)
+    for a, b in _EMOJI_RANGES:
+        if a <= cp <= b:
+            return True
+    try:
+        return "EMOJI" in unicodedata.name(ch, "")
+    except Exception:
+        return False
+
+def _draw_text_with_emoji(draw: ImageDraw.ImageDraw, x: int, y: int, text: str,
+                          base_font: ImageFont.FreeTypeFont,
+                          emoji_font: ImageFont.FreeTypeFont | None,
+                          fill=(255,255,255,255),
+                          line_spacing=0):
+    """
+    Draws text line-by-line, switching to emoji font for emoji characters.
+    """
+    lines = text.split("\n")
+    cursor_y = y
+    for line in lines:
+        cursor_x = x
+        for ch in line:
+            f = emoji_font if (emoji_font and _is_emoji_char(ch)) else base_font
+            draw.text((cursor_x, cursor_y), ch, font=f, fill=fill, embedded_color=True)
+            cursor_x += draw.textlength(ch, font=f)
+        # move down one line
+        bbox = base_font.getbbox("Ag")
+        line_height = (bbox[3] - bbox[1]) if bbox else int(base_font.size * 1.2)
+        cursor_y += line_height + line_spacing
+
+
 # Try multiple places for a REAL TTF. If none found, we fallback to bundled Pillow path.
 FONT_CANDIDATES = [
     # 1) project-local font (recommended: put DejaVuSans.ttf here)
@@ -1166,12 +1234,19 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     img.paste(bubble, (x_text, by), bubble)
 
     # Quote text
-    draw.multiline_text(
-        (x_text + inner_pad, by + inner_pad),
+# --- Draw emoji-aware text ---
+    base_font, emoji_font = _load_fonts_with_emoji(font_text.size)
+    _draw_text_with_emoji(
+        draw,
+        x_text + inner_pad,
+        by + inner_pad,
         wrapped,
-        font=font_text,
+        base_font=base_font,
+        emoji_font=emoji_font,
         fill=TEXT_C,
-        spacing=18,
+        line_spacing=18,
+)
+
     )
 
     # === Save as WEBP sticker ===
