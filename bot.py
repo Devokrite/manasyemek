@@ -1875,8 +1875,10 @@ async def croc_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # =======================
 def main():
-    _croc_load_scores()  # load croc scores at startup
+    # Load Croc scores once
+    _croc_load_scores()
 
+    # --- App / scheduler ---
     scheduler = AsyncIOScheduler(timezone=BISHKEK_TZ)
     job_queue = JobQueue()
     job_queue.scheduler = scheduler
@@ -1888,7 +1890,9 @@ def main():
         .build()
     )
 
-    # --- Command handlers ---
+    # =========================
+    # Command handlers (your existing ones)
+    # =========================
     app.add_handler(
         CommandHandler(
             ["quote", "q"],
@@ -1904,13 +1908,14 @@ def main():
         )
     )
     app.add_handler(CommandHandler("yemek", yemek))
-    # app.add_handler(CommandHandler("start", yemek))  # (left commented as in your file)
     app.add_handler(CommandHandler("debug", debug))
     app.add_handler(CommandHandler(["say", "echo"], say))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
 
-    # --- Crocodile handlers (BEFORE any generic callback/text handlers) ---
+    # =========================
+    # Crocodile (PUT BEFORE generic callbacks/text handlers)
+    # =========================
     app.add_handler(CommandHandler("croc", croc_cmd))
     app.add_handler(CommandHandler("rating", croc_rating))
     app.add_handler(CallbackQueryHandler(croc_callback, pattern=r"^croc:"))
@@ -1921,10 +1926,14 @@ def main():
         )
     )
 
-    # --- Your generic callback handler (keep AFTER the croc one) ---
+    # =========================
+    # Your generic callback handler (must be AFTER croc_callback above)
+    # =========================
     app.add_handler(CallbackQueryHandler(button))
 
-    # --- Remaining handlers ---
+    # =========================
+    # Remaining handlers (keep as needed)
+    # =========================
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("stickerquote", stickerquote))
     app.add_handler(
@@ -1934,6 +1943,9 @@ def main():
         )
     )
 
-    print("🤖 Bot is running... Press Ctrl+C to stop.")
+    logging.getLogger(__name__).info("🤖 Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
 
+
+if __name__ == "__main__":
+    main()
