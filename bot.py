@@ -430,6 +430,33 @@ async def croc_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("Рейтинг доступен только в группе.")
         return
     await update.effective_message.reply_text(_croc_board(chat.id), parse_mode=ParseMode.MARKDOWN)
+def _levenshtein_leq1(a: str, b: str) -> bool:
+    """True if Levenshtein distance <= 1 (one insert/delete/substitute)."""
+    if a == b:
+        return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    # ensure a is the shorter
+    if la > lb:
+        a, b = b, a
+        la, lb = lb, la
+    i = j = diff = 0
+    while i < la and j < lb:
+        if a[i] == b[j]:
+            i += 1; j += 1
+        else:
+            diff += 1
+            if diff > 1:
+                return False
+            if la == lb:
+                i += 1; j += 1    # substitute
+            else:
+                j += 1            # insert/delete in longer string
+    if j < lb or i < la:
+        diff += 1
+    return diff <= 1
+
 
 async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
@@ -441,7 +468,8 @@ async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     original = msg.text or ""
-    # normalize overall string (ё->е, lower, strip punct, collapse spaces)
+
+    # Normalized (ё->е, lower, strip punctuation, collapse spaces)
     text_norm = _croc_norm(original)
 
     g = CROC_GAMES.get(chat.id)
@@ -449,13 +477,12 @@ async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     target_raw = g["word"]
-    target = _croc_norm(target_raw)  # already maps ё->е
+    target = _croc_norm(target_raw)  # ё==е here
 
-    # Tokenize normalized message into words (Unicode letters/digits)
-    # Example: "это, наверное, жираф?" -> ["это","наверное","жираф"]
+    # Tokenize normalized message into word tokens (so "Это жираф?" works)
     words = re.findall(r"\w+", text_norm, flags=re.UNICODE)
 
-    # If explainer says the word -> warn & ignore (standalone word OR full-equal)
+    # Explainer cannot say the word (standalone token or full-equal)
     if user.id == g["explainer_id"]:
         if text_norm == target or target in words:
             try:
@@ -463,6 +490,85 @@ async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 pass
         return
+
+    # ---- Guess rules ----
+    # CORRECT if:
+    # • normalized whole message equals target, OR
+    # • any token equals target (ё==е)
+    is_exact = (text_norm == target) or (target in words)
+
+    if is_exact:
+        guesser_name = user.full_name or (user.username and f"@{user.username}") or f"id:{user.id}"
+        _croc_add_points(chat.id, user.id, guesser_name, 1.0)
+        _croc_add_points(chat.id, g["explainer_id"], g["explainer_name"], 0.5)
+        try:
+            await msg.reply_text(
+                f"🎉 Правильно! {guesser_name} угадал слово — *{g['word']}*.\n"
+                f"+1.0 {guesser_name}, +0.5 {g['explainer_name']}.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception:
+            pass
+        CROC_GAMES.pop(chat.id, None)
+        return
+
+    # CLOSE (but not correct): one typo away (len>=4), no points
+    close = False
+    if len(target) >= 4:
+        if _levenshtein_leq1(text_norm, target):
+            close = True
+        else:
+            for w in words:
+                if _levenshtein_leq1(w, target):
+                    close = True
+                    break
+
+    if close:
+        try:
+            await msg.reply_text("🔎 Почти! Ты очень близко — проверь одну букву.")
+        except Exception:
+            pass
+    # otherwise ignore
+
+    # ---- Guess evaluation rules you asked for ----
+    # CORRECT if:
+    # • normalized whole message equals target, OR
+    # • any token equals target (ё==е)
+    is_exact = (text_norm == target) or (target in words)
+
+    if is_exact:
+        guesser_name = user.full_name or (user.username and f"@{user.username}") or f"id:{user.id}"
+        _croc_add_points(chat.id, user.id, guesser_name, 1.0)
+        _croc_add_points(chat.id, g["explainer_id"], g["explainer_name"], 0.5)
+        try:
+            await msg.reply_text(
+                f"🎉 Правильно! {guesser_name} угадал слово — *{g['word']}*.\n"
+                f"+1.0 {guesser_name}, +0.5 {g['explainer_name']}.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception:
+            pass
+        CROC_GAMES.pop(chat.id, None)
+        return
+
+    # CLOSE (but not correct): one typo away (len>=4)
+    # We check both the whole normalized message and each token.
+    close = False
+    if len(target) >= 4:
+        if _levenshtein_leq1(text_norm, target):
+            close = True
+        else:
+            for w in words:
+                if _levenshtein_leq1(w, target):
+                    close = True
+                    break
+
+    if close:
+        try:
+            await msg.reply_text("🔎 Почти! Ты очень близко — проверь одну букву.")
+        except Exception:
+            pass
+    # otherwise ignore
 
     # ---- Guess evaluation rules ----
     # SUCCESS if:
@@ -1769,6 +1875,8 @@ async def croc_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # =======================
 def main():
+    _croc_load_scores()  # load croc scores at startup
+
     scheduler = AsyncIOScheduler(timezone=BISHKEK_TZ)
     job_queue = JobQueue()
     job_queue.scheduler = scheduler
@@ -1788,28 +1896,35 @@ def main():
             filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
         )
     )
+    app.add_handler(
+        CommandHandler(
+            ["qshot", "qimg", "quoteimg"],
+            qshot,
+            filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
+        )
+    )
     app.add_handler(CommandHandler("yemek", yemek))
+    # app.add_handler(CommandHandler("start", yemek))  # (left commented as in your file)
     app.add_handler(CommandHandler("debug", debug))
     app.add_handler(CommandHandler(["say", "echo"], say))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
 
-
-# --- Crocodile: add these four BEFORE your generic CallbackQueryHandler(button) ---
+    # --- Crocodile handlers (BEFORE any generic callback/text handlers) ---
     app.add_handler(CommandHandler("croc", croc_cmd))
     app.add_handler(CommandHandler("rating", croc_rating))
     app.add_handler(CallbackQueryHandler(croc_callback, pattern=r"^croc:"))
     app.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
-        croc_group_listener,
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+            croc_group_listener,
         )
     )
 
-# --- keep your generic callback AFTER Croc so it doesn't steal croc:* updates ---
+    # --- Your generic callback handler (keep AFTER the croc one) ---
     app.add_handler(CallbackQueryHandler(button))
 
-# --- the rest of your handlers unchanged ---
+    # --- Remaining handlers ---
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("stickerquote", stickerquote))
     app.add_handler(
@@ -1818,13 +1933,7 @@ def main():
             sms_purge,
         )
     )
-    
 
-    # ✅ only 4 spaces here (inside def main)
     print("🤖 Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
 
