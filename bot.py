@@ -997,21 +997,21 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("Reply to a message with /quote or use: /quote your text")
         return
 
-    # IMPORTANT: we render at 1× and use HUGE font sizes, so even if bitmap font is used, it’s legible.
+            # IMPORTANT: we render at 1× and use HUGE font sizes, so even if bitmap font is used, it’s legible.
     W = 1600
     PAD = 56
     AV = 320
 
-    BG = (18,18,18,255)
-    BUBBLE = (34,34,34,255)
-    NAME_C = (170,152,255,255)
-    TEXT_C = (245,245,245,255)
-    META_C = (200,200,200,255)
+    BG = (18, 18, 18, 255)
+    BUBBLE = (34, 34, 34, 255)
+    NAME_C = (170, 152, 255, 255)
+    TEXT_C = (245, 245, 245, 255)
+    META_C = (200, 200, 200, 255)
 
     # MASSIVE sizes to force readability
-font_name = _q5_pick_font(172)   # username
-font_text = _q5_pick_font(160)   # main quote
-font_meta = _q5_pick_font(104)    # @handle
+    font_name = _q5_pick_font(172)   # username
+    font_text = _q5_pick_font(160)   # main quote
+    font_meta = _q5_pick_font(104)   # @handle
 
     temp = Image.new("RGBA", (W, 10), BG)
     d0 = ImageDraw.Draw(temp)
@@ -1023,18 +1023,18 @@ font_meta = _q5_pick_font(104)    # @handle
 
     bubble_w = W - PAD - x_text
     inner_pad = 56
-    wrapped = _q5_wrap(d0, text_to_quote, font_text, bubble_w - inner_pad*2)
-    text_bbox = d0.multiline_textbbox((0,0), wrapped, font=font_text, spacing=18)
+    wrapped = _q5_wrap(d0, text_to_quote, font_text, bubble_w - inner_pad * 2)
+    text_bbox = d0.multiline_textbbox((0, 0), wrapped, font=font_text, spacing=18)
     text_h = text_bbox[3] - text_bbox[1]
-    bubble_h = text_h + inner_pad*2
+    bubble_h = text_h + inner_pad * 2
 
-# Height of the name + (optional) handle ONLY
-    name_bbox = d0.textbbox((0,0), display_name, font=font_name)
+    # Height of the name + (optional) handle ONLY
+    name_bbox = d0.textbbox((0, 0), display_name, font=font_name)
     name_h = name_bbox[3] - name_bbox[1]
     handle_h = 0
     if handle:
-    hb = d0.textbbox((0,0), handle, font=font_meta)
-    handle_h = hb[3] - hb[1]
+        hb = d0.textbbox((0, 0), handle, font=font_meta)
+        handle_h = hb[3] - hb[1]
 
     GAP_NAME = 20  # gap between handle and bubble
     header_h_name = name_h + (handle_h if handle else 0)
