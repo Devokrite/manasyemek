@@ -1557,6 +1557,59 @@ async def predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+CROC_CB_PREFIX = "croc:"  # make sure your button callback_data starts with this
+
+async def croc_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q or not q.data:
+        return
+
+    # Expected format: "croc:<action>:<chat_id>:<explainer_id>"
+    try:
+        _, action, chat_id_s, explainer_id_s = q.data.split(":")
+        chat_id = int(chat_id_s)
+        explainer_id = int(explainer_id_s)
+    except Exception:
+        return
+
+    # Only the explainer may use these buttons
+    if not q.from_user or q.from_user.id != explainer_id:
+        await q.answer("Только объясняющий может пользоваться этими кнопками.", show_alert=True)
+        return
+
+    g = CROC_GAMES.get(chat_id)
+    if not g or g.get("explainer_id") != explainer_id:
+        await q.answer("Раунд уже не активен.", show_alert=True)
+        return
+
+    if action == "show":
+        await q.answer(text=f"ТВОЁ СЛОВО:\n\n{g['word']}", show_alert=True)
+        return
+
+    if action == "skip":
+        new_word = _croc_pick_word(chat_id)
+        g["word"] = new_word
+        g["used"].add(new_word)
+        await q.answer(text=f"НОВОЕ СЛОВО:\n\n{new_word}", show_alert=True)
+        # optional: keep the same markup; no need to edit text
+        try:
+            await q.edit_message_reply_markup(reply_markup=q.message.reply_markup)
+        except Exception:
+            pass
+        return
+
+    if action == "end":
+        CROC_GAMES.pop(chat_id, None)
+        await q.answer("Раунд завершён.", show_alert=True)
+        try:
+            await q.message.reply_text("🛑 Раунд завершён организатором.")
+        except Exception:
+            pass
+        return
+
+
+
+
 
 # =======================
 # MAIN
@@ -1586,20 +1639,37 @@ def main():
     app.add_handler(CommandHandler(["say", "echo"], say))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
-    app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(CommandHandler("predict", predict))
-    app.add_handler(CommandHandler("stickerquote", stickerquote))
+# --- your existing commands ---
+    app.add_handler(CommandHandler("yemek", yemek))
+    app.add_handler(CommandHandler("debug", debug))
+    app.add_handler(CommandHandler(["say", "echo"], say))
+    app.add_handler(CommandHandler("mute", mute_cmd))
+    app.add_handler(CommandHandler("unmute", unmute_cmd))
+
+# --- Crocodile: add these four BEFORE your generic CallbackQueryHandler(button) ---
     app.add_handler(CommandHandler("croc", croc_cmd))
     app.add_handler(CommandHandler("rating", croc_rating))
     app.add_handler(CallbackQueryHandler(croc_callback, pattern=r"^croc:"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, croc_group_listener))
+    app.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+        croc_group_listener,
+        )
+    )
 
+# --- keep your generic callback AFTER Croc so it doesn't steal croc:* updates ---
+    app.add_handler(CallbackQueryHandler(button))
+
+# --- the rest of your handlers unchanged ---
+    app.add_handler(CommandHandler("predict", predict))
+    app.add_handler(CommandHandler("stickerquote", stickerquote))
     app.add_handler(
         MessageHandler(
             filters.TEXT & filters.Regex(r"^-sms\s+\d{1,3}$"),
             sms_purge,
         )
     )
+    
 
     # ✅ only 4 spaces here (inside def main)
     print("🤖 Bot is running... Press Ctrl+C to stop.")
