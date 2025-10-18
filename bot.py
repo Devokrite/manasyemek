@@ -1012,9 +1012,9 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     META_C = (200, 200, 200, 255)
 
     # MASSIVE sizes to force readability
-    font_name = _q5_pick_font(520)   # username — extremely big
-    font_text = _q5_pick_font(480)   # main quote — extremely big
-    font_meta = _q5_pick_font(300)   # @handle — very big
+    font_name = _q5_pick_font(120)   # username — extremely big
+    font_text = _q5_pick_font(100)   # main quote — extremely big
+    font_meta = _q5_pick_font(80)   # @handle — very big
 
 
         # Scratch canvas for measuring
