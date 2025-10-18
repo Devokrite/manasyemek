@@ -188,9 +188,10 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     SUBTLE = (200, 200, 200, 255)
 
     # Fonts
-    font_name = _load_font(44)
-    font_text = _load_font(40)
-    font_meta = _load_font(28)
+    font_name = _pick_font(80 * SCALE)
+    font_text = _pick_font(72 * SCALE)
+    font_meta = _pick_font(52 * SCALE)
+
 
     # Base image
     img = Image.new("RGBA", (W, H), BG)
@@ -485,35 +486,44 @@ def _render_quote_card(pfp_img: Image.Image | None, display_name: str, handle: s
     out = io.BytesIO()
     base.save(out, format="PNG")
     return out.getvalue()
+from telegram import Update
+from telegram.ext import ContextTypes
+import asyncio
+
 async def say(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
+    msg = update.effective_message
+    bot = context.bot
+    chat_id = msg.chat_id
 
-    # If you reply to a message with /say -> bot re-sends that message as itself
-    if msg.reply_to_message:
-        await context.bot.copy_message(
-            chat_id=msg.chat_id,
-            from_chat_id=msg.chat_id,
-            message_id=msg.reply_to_message.message_id,
-        )
-        return
+    try:
+        # 1️⃣ If used as a reply: resend the replied message
+        if msg.reply_to_message:
+            await bot.copy_message(
+                chat_id=chat_id,
+                from_chat_id=chat_id,
+                message_id=msg.reply_to_message.message_id,
+            )
+        else:
+            # 2️⃣ Otherwise, repeat the text after /say
+            text = " ".join(context.args) if context.args else None
+            if not text and msg.text:
+                parts = msg.text.split(maxsplit=1)
+                text = parts[1] if len(parts) > 1 else ""
 
-    # Otherwise, repeat the text after the command
-    text = " ".join(context.args) if context.args else None
+            if text:
+                if len(text) > 4096:
+                    text = text[:4090] + "…"
+                await bot.send_message(chat_id=chat_id, text=text)
+            else:
+                await msg.reply_text("Send `/say <text>` or reply to any message with `/say`.", parse_mode="Markdown")
 
-    # If user sent "/say something" as a single message, try to strip the command
-    if not text and msg.text:
-        parts = msg.text.split(maxsplit=1)
-        text = parts[1] if len(parts) > 1 else ""
-
-    if text:
-        # Telegram max message length guard
-        if len(text) > 4096:
-            text = text[:4090] + "…"
-        await msg.reply_text(text)
-    else:
-        await msg.reply_text("Send `/say <text>` or reply to any message with `/say`.", parse_mode="Markdown")
-        from telegram.ext import CommandHandler, filters
-from telegram.helpers import escape_markdown
+    finally:
+        # 3️⃣ Delete the user's command message (after a tiny delay)
+        await asyncio.sleep(0.15)
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
+        except Exception:
+            pass
 
 async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
