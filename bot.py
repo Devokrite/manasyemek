@@ -340,6 +340,45 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 CROC_CB_PREFIX = "croc:"  # callback data prefix
 
+async def _croc_start_round(context: ContextTypes.DEFAULT_TYPE, chat_id: int, explainer_user):
+    """Start (or continue) a round in the group with a specific explainer."""
+    explainer_id = explainer_user.id
+    explainer_name = (
+        explainer_user.full_name
+        or (explainer_user.username and f"@{explainer_user.username}")
+        or f"id:{explainer_id}"
+    )
+
+    # keep 'used' set across rounds to reduce repeats
+    used_prev = set()
+    if chat_id in CROC_GAMES and isinstance(CROC_GAMES[chat_id].get("used"), set):
+        used_prev = CROC_GAMES[chat_id]["used"]
+
+    word = _croc_pick_word(chat_id)
+    used_prev.add(word)
+
+    CROC_GAMES[chat_id] = {
+        "explainer_id": explainer_id,
+        "explainer_name": explainer_name,
+        "word": word,
+        "used": used_prev,
+    }
+
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔐 Показать слово", callback_data=f"{CROC_CB_PREFIX}show:{chat_id}:{explainer_id}"),
+        InlineKeyboardButton("⏭ Пропустить", callback_data=f"{CROC_CB_PREFIX}skip:{chat_id}:{explainer_id}"),
+        InlineKeyboardButton("🛑 Завершить", callback_data=f"{CROC_CB_PREFIX}end:{chat_id}:{explainer_id}"),
+    ]])
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"🎬 Новый раунд! Объясняет: *{explainer_name}*\nНажми «Показать слово», чтобы увидеть задание.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb,
+    )
+
+
+
 async def croc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     chat = update.effective_chat
@@ -353,16 +392,16 @@ async def croc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with lock:
         if chat.id in CROC_GAMES:
             g = CROC_GAMES[chat.id]
-            await msg.reply_text(f"Уже идёт раунд. Объясняет: {g['explainer_name']}.\nНажмите *Показать слово* под сообщением.", parse_mode=ParseMode.MARKDOWN)
+            await msg.reply_text(
+                f"Уже идёт раунд. Объясняет: {g['explainer_name']}.\n"
+                f"Нажмите *Показать слово* под сообщением.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
             return
 
-        word = _croc_pick_word(chat.id)
-        CROC_GAMES[chat.id] = {
-            "explainer_id": user.id,
-            "explainer_name": user.full_name or (user.username and f"@{user.username}") or f"id:{user.id}",
-            "word": word,
-            "used": {word},
-        }
+        # start first round with the caller as explainer
+        await _croc_start_round(context, chat.id, user)
+
 
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("🔐 Показать слово", callback_data=f"{CROC_CB_PREFIX}show:{chat.id}:{user.id}"),
@@ -501,16 +540,22 @@ async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE
         guesser_name = user.full_name or (user.username and f"@{user.username}") or f"id:{user.id}"
         _croc_add_points(chat.id, user.id, guesser_name, 1.0)
         _croc_add_points(chat.id, g["explainer_id"], g["explainer_name"], 0.5)
+
+    # Announce the win
         try:
             await msg.reply_text(
                 f"🎉 Правильно! {guesser_name} угадал слово — *{g['word']}*.\n"
-                f"+1.0 {guesser_name}, +0.5 {g['explainer_name']}.",
+                f"+1.0 {guesser_name}, +0.5 {g['explainer_name']}.\n"
+                f"▶️ Следующий раунд: объясняет {guesser_name}.",
                 parse_mode=ParseMode.MARKDOWN,
             )
         except Exception:
             pass
-        CROC_GAMES.pop(chat.id, None)
-        return
+
+    # Immediately start next round with the guesser as the new explainer
+    # (no need to /croc again)
+    await _croc_start_round(context, chat.id, user)
+    return
 
     # CLOSE (but not correct): one typo away (len>=4), no points
     close = False
