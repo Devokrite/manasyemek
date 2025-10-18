@@ -109,7 +109,14 @@ def _croc_pick_word(chat_id: int) -> str:
     return random.choice(pool)
 
 def _croc_norm(s: str) -> str:
-    return " ".join((s or "").strip().lower().split()).strip("«»„“”’'\"—–-.,!?;:")
+    # Lowercase, swap ё->е, remove most punctuation/emoji, collapse spaces
+    s = (s or "").lower().replace("ё", "е")
+    # Keep letters/digits/spaces only
+    s = re.sub(r"[^\w\s]+", " ", s, flags=re.UNICODE)
+    # Collapse whitespace
+    s = " ".join(s.split())
+    return s
+
 
 def _croc_add_points(chat_id: int, user_id: int, name: str, pts: float):
     c = str(chat_id); u = str(user_id)
@@ -433,37 +440,111 @@ async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not msg or not msg.text:
         return
 
-    text = _croc_norm(msg.text)
-    lock = _croc_lock(chat.id)
-    async with lock:
-        g = CROC_GAMES.get(chat.id)
-        if not g:
-            return
-        target = _croc_norm(g["word"])
+    original = msg.text or ""
+    # normalize both; ё -> е is handled inside _croc_norm
+    text = _croc_norm(original)
 
-        # if explainer says the word -> warn & ignore
-        if user.id == g["explainer_id"] and text == target:
+    g = CROC_GAMES.get(chat.id)
+    if not g:
+        return
+
+    target_raw = g["word"]
+    target = _croc_norm(target_raw)
+
+    # If explainer says the word -> warn & ignore
+    if user.id == g["explainer_id"]:
+        # exact after normalization OR standalone word check on original (ё->е)
+        if (
+            text == target
+            or re.search(
+                rf"(?<!\w){re.escape(target)}(?!\w)",
+                original.lower().replace("ё", "е"),
+            )
+        ):
             try:
                 await msg.reply_text("⚠️ Нельзя произносить слово напрямую — объясняй иначе!")
             except Exception:
                 pass
-            return
+        return
 
-        # correct guess by anyone else
-        if text == target and user.id != g["explainer_id"]:
-            guesser_name = user.full_name or (user.username and f"@{user.username}") or f"id:{user.id}"
-            _croc_add_points(chat.id, user.id, guesser_name, 1.0)
-            _croc_add_points(chat.id, g["explainer_id"], g["explainer_name"], 0.5)
+    # ---- Guess evaluation rules ----
+    # SUCCESS if:
+    # 1) normalized message equals target, OR
+    # 2) target appears as a standalone word anywhere in the original text (ё->е normalized).
+    is_exact = (
+        text == target
+        or re.search(
+            rf"(?<!\w){re.escape(target)}(?!\w)",
+            original.lower().replace("ё", "е"),
+        ) is not None
+    )
+
+    if is_exact:
+        guesser_name = user.full_name or (user.username and f"@{user.username}") or f"id:{user.id}"
+        _croc_add_points(chat.id, user.id, guesser_name, 1.0)
+        _croc_add_points(chat.id, g["explainer_id"], g["explainer_name"], 0.5)
+        try:
+            await msg.reply_text(
+                f"🎉 Правильно! {guesser_name} угадал слово — *{g['word']}*.\n"
+                f"+1.0 {guesser_name}, +0.5 {g['explainer_name']}.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception:
+            pass
+        CROC_GAMES.pop(chat.id, None)
+        return
+
+    # CLOSE (but not correct): if whole-message distance == 1 (and target length >= 4)
+    # Note: we check the normalized whole message vs the target to avoid rewarding noisy texts.
+    if len(target) >= 4 and _levenshtein_leq1(text, target):
+        try:
+            await msg.reply_text("🔎 Почти! Ты очень близко — проверь одну букву.")
+        except Exception:
+            pass
+        return
+
+    # otherwise: ignore
+
+
+    target_raw = g["word"]
+    target = _croc_norm(target_raw)
+
+    # If explainer says the word -> warn & ignore
+    if user.id == g["explainer_id"]:
+        # exact after normalization OR standalone word check
+        if text == target or re.search(rf"(?<!\w){re.escape(target)}(?!\w)", original.lower().replace("ё","е")):
             try:
-                await msg.reply_text(
-                    f"🎉 Правильно! {guesser_name} угадал слово — *{g['word']}*.\n"
-                    f"+1.0 {guesser_name}, +0.5 {g['explainer_name']}.",
-                    parse_mode=ParseMode.MARKDOWN,
-                )
+                await msg.reply_text("⚠️ Нельзя произносить слово напрямую — объясняй иначе!")
             except Exception:
                 pass
-            CROC_GAMES.pop(chat.id, None)
-            return
+        return
+
+    # ACCEPT if:
+    # 1) whole message equals normalized target
+    # 2) target appears as a standalone word anywhere in original text (ё->е normalized)
+    # 3) message has a single-typo variant of target (for words >= 4)
+    ok = (
+        text == target
+        or re.search(rf"(?<!\w){re.escape(target)}(?!\w)", original.lower().replace("ё","е")) is not None
+        or (len(target) >= 4 and _levenshtein_leq1(text, target))
+    )
+    if not ok:
+        return
+
+    guesser_name = user.full_name or (user.username and f"@{user.username}") or f"id:{user.id}"
+    _croc_add_points(chat.id, user.id, guesser_name, 1.0)
+    _croc_add_points(chat.id, g["explainer_id"], g["explainer_name"], 0.5)
+
+    try:
+        await msg.reply_text(
+            f"🎉 Правильно! {guesser_name} угадал слово — *{g['word']}*.\n"
+            f"+1.0 {guesser_name}, +0.5 {g['explainer_name']}.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    except Exception:
+        pass
+
+    CROC_GAMES.pop(chat.id, None)
 
 
     # Canvas settings
