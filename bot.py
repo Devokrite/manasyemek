@@ -372,10 +372,11 @@ async def _croc_start_round(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ex
 
     await context.bot.send_message(
         chat_id=chat_id,
-        text=f"🎬 Новый раунд! Объясняет: *{explainer_name}*\nНажми «Показать слово», чтобы увидеть задание.",
+        text=f"🎬 Раунд начался! Объясняет: *{explainer_name}*\nНажми «Показать слово», чтобы увидеть слово.",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=kb,
-    )
+    )    
+
 
 
 
@@ -398,6 +399,10 @@ async def croc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN,
             )
             return
+
+        # Only start the round; do NOT send any extra message here.
+        await _croc_start_round(context, chat.id, user)
+
 
         # start first round with the caller as explainer
         await _croc_start_round(context, chat.id, user)
