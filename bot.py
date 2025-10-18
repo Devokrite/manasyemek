@@ -1137,9 +1137,9 @@ async def stickerquote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     META_C = (200, 200, 200, 255)
 
     # Fonts (for measuring; emoji-aware fonts are loaded at draw time below)
-    font_name = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=360)
-    font_meta = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=220)
-    font_text = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=320)
+    font_name = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=140)
+    font_meta = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=90)
+    font_text = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=120)
 
     # Scratch for measuring
     temp = Image.new("RGBA", (W, 10), BG)
