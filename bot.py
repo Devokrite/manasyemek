@@ -1226,12 +1226,50 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         nm_w = draw.textlength(display_name + "  ", font=font_name)
         draw.text((x_text + nm_w, y_top + 12), handle, font=font_meta, fill=META_C)
 
-    # Quote bubble
+        # Quote bubble
     r = 42
     bubble = Image.new("RGBA", (bubble_w, bubble_h), (0, 0, 0, 0))
     bdraw = ImageDraw.Draw(bubble)
     bdraw.rounded_rectangle((0, 0, bubble_w, bubble_h), radius=r, fill=BUBBLE)
     img.paste(bubble, (x_text, by), bubble)
+
+    # --- Draw emoji-aware text (replaces draw.multiline_text(...)) ---
+    base_font, emoji_font = _load_fonts_with_emoji(font_text.size)
+    _draw_text_with_emoji(
+        draw,
+        x_text + inner_pad,
+        by + inner_pad,
+        wrapped,
+        base_font=base_font,
+        emoji_font=emoji_font,
+        fill=TEXT_C,
+        line_spacing=18,
+    )
+
+    # === Save & send as WEBP sticker ===
+    from PIL import features
+    try:
+        print("WEBP support:", features.check("webp"))
+    except Exception:
+        pass
+
+    # Ensure ≤512px on the longest side
+    max_side = 512
+    w, h = img.size
+    scale = min(max_side / w, max_side / h, 1)
+    if scale < 1:
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGBA")
+
+    bio = BytesIO()
+    bio.name = "quote.webp"
+    img.save(bio, format="WEBP", lossless=True, quality=100, method=6)
+    bio.seek(0)
+
+    await bot.send_sticker(chat_id=update.effective_chat.id, sticker=bio)
+
 
     # Quote text
 # --- Draw emoji-aware text ---
