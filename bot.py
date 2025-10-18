@@ -1900,13 +1900,13 @@ def main():
             filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
         )
     )
-    app.add_handler(
-        CommandHandler(
-            ["qshot", "qimg", "quoteimg"],
-            qshot,
-            filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
-        )
-    )
+    # app.add_handler(
+    #     CommandHandler(
+             #["qshot", "qimg", "quoteimg"],
+           #  qshot,
+         #    filters=filters.ChatType.PRIVATE | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
+       #  )
+     #)
     app.add_handler(CommandHandler("yemek", yemek))
     app.add_handler(CommandHandler("debug", debug))
     app.add_handler(CommandHandler(["say", "echo"], say))
