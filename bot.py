@@ -239,12 +239,21 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         spacing=6
     )
 
-    # Send as photo
+    # === Save as WEBP sticker ===
     bio = BytesIO()
-    bio.name = "quote.png"
-    img.save(bio, format="PNG")
+    bio.name = "quote.webp"
+    # Resize safely to Telegram sticker size limit (max 512x512)
+    max_side = 512
+    w, h = img.size
+    scale = min(max_side / w, max_side / h, 1)
+    if scale < 1:
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    img.save(bio, format="WEBP", lossless=True)
     bio.seek(0)
-    await bot.send_photo(chat_id=update.effective_chat.id, photo=bio)
+
+    # Send as sticker instead of photo
+    await bot.send_sticker(chat_id=update.effective_chat.id, sticker=bio)
 
 # -------------------------------
 # Register the handler
