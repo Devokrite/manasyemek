@@ -462,19 +462,52 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
     except Exception:
         return ImageFont.load_default()
 
-def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
-    # Simple greedy word-wrap
+def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, content_width: int) -> str:
+    """
+    Wrap so each line aims for 6 words (never fewer than 5 if it fits),
+    while still respecting the available pixel width.
+    """
+    TARGET = 6
+    MINLINE = 5
+
     words = text.split()
-    lines, cur = [], []
-    for w in words:
-        test = (" ".join(cur + [w])).strip()
-        if draw.textlength(test, font=font) <= max_width:
-            cur.append(w)
-        else:
-            if cur: lines.append(" ".join(cur))
-            cur = [w]
-    if cur: lines.append(" ".join(cur))
-    return lines
+    if not words:
+        return ""
+
+    lines = []
+    i = 0
+    while i < len(words):
+        # try to take up to TARGET words
+        max_take = min(TARGET, len(words) - i)
+
+        # try the largest count first (TARGET), down to MINLINE, that fits in width
+        took = 0
+        for take in range(max_take, MINLINE - 1, -1):
+            candidate = " ".join(words[i:i+take])
+            if draw.textlength(candidate, font=font) <= content_width:
+                lines.append(candidate)
+                i += take
+                took = take
+                break
+
+        if took:
+            continue
+
+        # If even MINLINE words don't fit, fall back to the longest that fits (>=1 word)
+        # This covers very long words or narrow content width.
+        take = 1
+        while i + take <= len(words):
+            candidate = " ".join(words[i:i+take])
+            if draw.textlength(candidate, font=font) > content_width:
+                break
+            take += 1
+        # take-1 fits, or if nothing fit, just take one word
+        take = max(1, take - 1)
+        lines.append(" ".join(words[i:i+take]))
+        i += take
+
+    return "\n".join(lines)
+
 
 def _make_round_avatar(img: Image.Image, size: int = 96) -> Image.Image:
     img = img.convert("RGB").resize((size, size))
