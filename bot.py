@@ -402,18 +402,6 @@ async def croc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Start the round ONCE; the helper sends the only message.
         await _croc_start_round(context, chat.id, user)
 
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔐 Показать слово", callback_data=f"{CROC_CB_PREFIX}show:{chat.id}:{user.id}"),
-        InlineKeyboardButton("⏭ Пропустить", callback_data=f"{CROC_CB_PREFIX}skip:{chat.id}:{user.id}"),
-        InlineKeyboardButton("🛑 Завершить", callback_data=f"{CROC_CB_PREFIX}end:{chat.id}:{user.id}"),
-    ]])
-
-    await msg.reply_text(
-        f"🎬 Раунд начался! Объясняет: *{CROC_GAMES[chat.id]['explainer_name']}*\n"
-        f"Угадывайте слово в чате. Первые получают очки.",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=kb,
-    )
 
 async def croc_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
