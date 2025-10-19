@@ -1,7 +1,12 @@
+
 import asyncio
 import logging
 import re
 import time
+import os
+import sqlite3
+import threading
+from pathlib import Path
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
@@ -123,10 +128,15 @@ CROC_WORDS = [
     
 ]
 CROC_SCORES_FILE = Path("croc_scores.json")
+# === Croc persistent storage (SQLite) ===
+DB_PATH = os.getenv("CROC_DB_PATH", "/data/croc.sqlite")
+_DB_LOCK = threading.Lock()
+
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("manas_menu_bot")
+
 
 
 
@@ -157,16 +167,16 @@ def _croc_norm(s: str) -> str:
 
 
 def _croc_add_points(chat_id: int, user_id: int, name: str, pts: float):
-    c = str(chat_id); u = str(user_id)
-    CROC_SCORES.setdefault(c, {})
-    CROC_SCORES[c].setdefault(u, {"name": name, "points": 0.0})
-    CROC_SCORES[c][u]["name"] = name
-    CROC_SCORES[c][u]["points"] = float(CROC_SCORES[c][u]["points"]) + float(pts)
-    try:
-        with open(CROC_SCORES_FILE, "w", encoding="utf-8") as f:
-            json.dump(CROC_SCORES, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        log.error(f"[CROC] save scores failed: {e}")
+    with _DB_LOCK, sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            INSERT INTO scores (chat_id, user_id, name, points)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(chat_id, user_id) DO UPDATE SET
+                name=excluded.name,
+                points=points + excluded.points;
+        """, (str(chat_id), str(user_id), name, float(pts)))
+        conn.commit()
+
 
 def _croc_load_scores():
     global CROC_SCORES
@@ -175,17 +185,38 @@ def _croc_load_scores():
             CROC_SCORES = json.load(open(CROC_SCORES_FILE, "r", encoding="utf-8"))
         except Exception:
             CROC_SCORES = {}
+def _croc_db_init():
+    # ensure folder exists
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS scores (
+                chat_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                name    TEXT NOT NULL,
+                points  REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY(chat_id, user_id)
+            );
+        """)
+        conn.commit()
+
 
 def _croc_board(chat_id: int) -> str:
-    c = str(chat_id)
-    if not CROC_SCORES.get(c):
-        return "Пока нет очков. Запустите раунд: /croc ✨"
-    arr = [(v["points"], v["name"]) for v in CROC_SCORES[c].values()]
-    arr.sort(key=lambda x: x[0], reverse=True)
+    with _DB_LOCK, sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("""
+            SELECT name, points
+            FROM scores
+            WHERE chat_id = ?
+            ORDER BY points DESC
+            LIMIT 15;
+        """, (str(chat_id),)).fetchall()
+    if not rows:
+        return "Пока нет очков. Сыграйте раунд командой /croc ✨"
     lines = ["🏆 *Рейтинг чата:*"]
-    for i, (pts, name) in enumerate(arr[:15], start=1):
+    for i, (name, pts) in enumerate(rows, start=1):
         lines.append(f"{i}. {name} — *{pts:.1f}*")
     return "\n".join(lines)
+
 
 # ===== PREDICTIONS CONFIG (hard-coded) =====
 # Map Telegram user_id -> real name (in Russian). Fill your people here:
@@ -201,6 +232,7 @@ REAL_NAMES: dict[int, str] = {
      7687350164: "Мээрим",
      987503187: "Айганыш",
      862779556: "Айдана",
+     7687350164: "Мээрим",
     
 }
 
@@ -1882,6 +1914,19 @@ async def pm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("Напиши секрет после /pm. Пример: /pm это секретное сообщение")
         return
 
+    # (Keep your validation above ...)
+    if not secret:
+        await msg.reply_text("Напиши секрет после /pm. Пример: /pm это секретное сообщение")
+        return
+
+    # 💥 NEW: delete the user's command message so the secret isn't visible in chat
+    try:
+        await msg.delete()
+    except Exception:
+        # If bot lacks delete rights, we just proceed (but warn in logs if you like)
+        pass
+
+    
     # Store payload
     token = uuid.uuid4().hex[:16]
     _PM_STORE[token] = {
@@ -1895,10 +1940,11 @@ async def pm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("🔐 Open secret", callback_data=f"{PM_CB_PREFIX}:{token}")
     ]])
 
-    await msg.reply_html(
-        f"🔏 <b>Секрет для</b> {target_user.mention_html()}\n"
-        f"Только он(а) может открыть. Истекает через {int(PM_TTL.total_seconds()//3600)} ч.",
-        reply_markup=kb
+    await update.effective_chat.send_message(
+    "🔏 <b>Секрет готов.</b> Только адресат сможет открыть.",
+    reply_markup=kb,
+    parse_mode="HTML",
+    disable_web_page_preview=True,
     )
 
 async def pm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1944,6 +1990,7 @@ async def pm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # =======================
 def main():
+     _croc_db_init()
     # Load Croc scores once
     _croc_load_scores()
 
