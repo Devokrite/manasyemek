@@ -341,7 +341,6 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 CROC_CB_PREFIX = "croc:"  # callback data prefix
 
 async def _croc_start_round(context: ContextTypes.DEFAULT_TYPE, chat_id: int, explainer_user):
-    """Start (or continue) a round in the group with a specific explainer."""
     explainer_id = explainer_user.id
     explainer_name = (
         explainer_user.full_name
@@ -349,7 +348,6 @@ async def _croc_start_round(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ex
         or f"id:{explainer_id}"
     )
 
-    # keep 'used' set across rounds to reduce repeats
     used_prev = set()
     if chat_id in CROC_GAMES and isinstance(CROC_GAMES[chat_id].get("used"), set):
         used_prev = CROC_GAMES[chat_id]["used"]
@@ -370,16 +368,16 @@ async def _croc_start_round(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ex
         InlineKeyboardButton("🛑 Завершить", callback_data=f"{CROC_CB_PREFIX}end:{chat_id}:{explainer_id}"),
     ]])
 
+    # ONE message only:
     await context.bot.send_message(
         chat_id=chat_id,
-        text=f"🎬 Раунд начался! Объясняет: *{explainer_name}*\nНажми «Показать слово», чтобы увидеть слово.",
+        text=(
+            f"🎬 Раунд начался! Объясняет: *{explainer_name}*\n"
+            f"Нажми «Показать слово», чтобы увидеть слово."
+        ),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=kb,
-    )    
-
-
-
-
+    )
 async def croc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     chat = update.effective_chat
@@ -400,8 +398,7 @@ async def croc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Start the round ONCE (helper sends the message with buttons)
-        await _croc_start_round(context, chat.id, user)
+        await _croc_start_round(context, chat.id, user)   # <-- no extra sends here
 
 
 
