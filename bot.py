@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 import re
@@ -1989,23 +1988,23 @@ async def pm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =======================
 # MAIN
 # =======================
-def main():
+    def main():
      _croc_db_init()
     # Load Croc scores once
     _croc_load_scores()
-
+    
     # --- App / scheduler ---
     scheduler = AsyncIOScheduler(timezone=BISHKEK_TZ)
     job_queue = JobQueue()
     job_queue.scheduler = scheduler
-
+    
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
         .job_queue(job_queue)
         .build()
     )
-
+    
     # =========================
     # Command handlers (your existing ones)
     # =========================
@@ -2030,8 +2029,8 @@ def main():
     app.add_handler(CommandHandler("unmute", unmute_cmd))
         # --- Secret PM (popup) ---
     app.add_handler(CommandHandler("pm", pm_cmd, filters=filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP))
-
-
+    
+    
     # =========================
     # Crocodile (PUT BEFORE generic callbacks/text handlers)
     # =========================
@@ -2044,14 +2043,14 @@ def main():
             croc_group_listener,
         )
     )
-# Secret PM callback (must be BEFORE the generic CallbackQueryHandler(button))
+    # Secret PM callback (must be BEFORE the generic CallbackQueryHandler(button))
     app.add_handler(CallbackQueryHandler(pm_callback, pattern=r"^pm:"))
-
+    
     # =========================
     # Your generic callback handler (must be AFTER croc_callback above)
     # =======================
     app.add_handler(CallbackQueryHandler(button))
-
+    
     # =========================
     # Remaining handlers (keep as needed)
     # =========================
@@ -2063,10 +2062,10 @@ def main():
             sms_purge,
         )
     )
-
+    
     logging.getLogger(__name__).info("🤖 Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
-
-
-if __name__ == "__main__":
+    
+    
+    if __name__ == "__main__":
     main()
