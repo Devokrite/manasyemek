@@ -378,6 +378,7 @@ async def _croc_start_round(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ex
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=kb,
     )
+
 async def croc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     chat = update.effective_chat
@@ -398,9 +399,8 @@ async def croc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        await _croc_start_round(context, chat.id, user)   # <-- no extra sends here
-
-
+        # Start the round ONCE; the helper sends the only message.
+        await _croc_start_round(context, chat.id, user)
 
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("🔐 Показать слово", callback_data=f"{CROC_CB_PREFIX}show:{chat.id}:{user.id}"),
