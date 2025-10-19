@@ -400,12 +400,9 @@ async def croc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Only start the round; do NOT send any extra message here.
+        # Start the round ONCE (helper sends the message with buttons)
         await _croc_start_round(context, chat.id, user)
 
-
-        # start first round with the caller as explainer
-        await _croc_start_round(context, chat.id, user)
 
 
     kb = InlineKeyboardMarkup([[
@@ -512,21 +509,16 @@ async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     original = msg.text or ""
-
-    # Normalized (ё->е, lower, strip punctuation, collapse spaces)
     text_norm = _croc_norm(original)
 
     g = CROC_GAMES.get(chat.id)
     if not g:
         return
 
-    target_raw = g["word"]
-    target = _croc_norm(target_raw)  # ё==е here
-
-    # Tokenize normalized message into word tokens (so "Это жираф?" works)
+    target = _croc_norm(g["word"])
     words = re.findall(r"\w+", text_norm, flags=re.UNICODE)
 
-    # Explainer cannot say the word (standalone token or full-equal)
+    # Explainer cannot say the word
     if user.id == g["explainer_id"]:
         if text_norm == target or target in words:
             try:
@@ -535,18 +527,14 @@ async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
         return
 
-    # ---- Guess rules ----
-    # CORRECT if:
-    # • normalized whole message equals target, OR
-    # • any token equals target (ё==е)
+    # ----- Guess evaluation -----
+    # exact (ё==е) if whole message equals OR token equals
     is_exact = (text_norm == target) or (target in words)
 
     if is_exact:
         guesser_name = user.full_name or (user.username and f"@{user.username}") or f"id:{user.id}"
         _croc_add_points(chat.id, user.id, guesser_name, 1.0)
         _croc_add_points(chat.id, g["explainer_id"], g["explainer_name"], 0.5)
-
-    # Announce the win
         try:
             await msg.reply_text(
                 f"🎉 Правильно! {guesser_name} угадал слово — *{g['word']}*.\n"
@@ -557,28 +545,21 @@ async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception:
             pass
 
-    # Immediately start next round with the guesser as the new explainer
-    # (no need to /croc again)
-    await _croc_start_round(context, chat.id, user)
-    return
+        # Start next round WITH THE GUESSER (protect with lock)
+        lock = _croc_lock(chat.id)
+        async with lock:
+            await _croc_start_round(context, chat.id, user)
+        return
 
-    # CLOSE (but not correct): one typo away (len>=4), no points
-    close = False
+    # Close (but not correct): one-letter typo (len>=4) -> hint only, no points
     if len(target) >= 4:
-        if _levenshtein_leq1(text_norm, target):
-            close = True
-        else:
-            for w in words:
-                if _levenshtein_leq1(w, target):
-                    close = True
-                    break
-
-    if close:
-        try:
-            await msg.reply_text("🔎 Почти! Ты очень близко — проверь одну букву.")
-        except Exception:
-            pass
+        if _levenshtein_leq1(text_norm, target) or any(_levenshtein_leq1(w, target) for w in words):
+            try:
+                await msg.reply_text("🔎 Почти! Ты очень близко — проверь одну букву.")
+            except Exception:
+                pass
     # otherwise ignore
+
 
     # ---- Guess evaluation rules you asked for ----
     # CORRECT if:
