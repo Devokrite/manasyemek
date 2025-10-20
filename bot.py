@@ -2,10 +2,6 @@ import asyncio
 import logging
 import re
 import time
-import os
-import sqlite3
-import threading
-from pathlib import Path
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
@@ -44,29 +40,6 @@ from telegram.ext import ContextTypes
 # put with your /quote code imports
 from pathlib import Path
 from PIL import ImageFont
-# ========= SECRET PM (popup in group, no DM) =========
-import uuid
-from datetime import datetime, timedelta
-
-PM_CB_PREFIX = "pm"   # callback prefix
-PM_TTL = timedelta(hours=6)  # how long a secret stays valid
-
-# token -> payload dict
-_PM_STORE: dict[str, dict] = {}  # {"from_id": int, "to_id": int, "text": str, "created": datetime}
-
-def _pm_cleanup():
-    now = datetime.utcnow()
-    stale = [tok for tok, v in _PM_STORE.items() if now - v["created"] > PM_TTL]
-    for tok in stale:
-        _PM_STORE.pop(tok, None)
-
-def _pm_truncate_for_alert(s: str) -> str:
-    # Telegram alert popup is short; keep it safe (~180-190 chars)
-    s = s.strip()
-    if len(s) <= 190:
-        return s
-    return s[:187] + "…"
-
 
 def _pick_font(size: int):
     # 1) Use Pillow’s bundled DejaVu (has Cyrillic)
@@ -127,15 +100,10 @@ CROC_WORDS = [
     
 ]
 CROC_SCORES_FILE = Path("croc_scores.json")
-# === Croc persistent storage (SQLite) ===
-DB_PATH = os.getenv("CROC_DB_PATH", "/data/croc.sqlite")
-_DB_LOCK = threading.Lock()
-
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("manas_menu_bot")
-
 
 
 
@@ -166,16 +134,16 @@ def _croc_norm(s: str) -> str:
 
 
 def _croc_add_points(chat_id: int, user_id: int, name: str, pts: float):
-    with _DB_LOCK, sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""
-            INSERT INTO scores (chat_id, user_id, name, points)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(chat_id, user_id) DO UPDATE SET
-                name=excluded.name,
-                points=points + excluded.points;
-        """, (str(chat_id), str(user_id), name, float(pts)))
-        conn.commit()
-
+    c = str(chat_id); u = str(user_id)
+    CROC_SCORES.setdefault(c, {})
+    CROC_SCORES[c].setdefault(u, {"name": name, "points": 0.0})
+    CROC_SCORES[c][u]["name"] = name
+    CROC_SCORES[c][u]["points"] = float(CROC_SCORES[c][u]["points"]) + float(pts)
+    try:
+        with open(CROC_SCORES_FILE, "w", encoding="utf-8") as f:
+            json.dump(CROC_SCORES, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log.error(f"[CROC] save scores failed: {e}")
 
 def _croc_load_scores():
     global CROC_SCORES
@@ -184,38 +152,17 @@ def _croc_load_scores():
             CROC_SCORES = json.load(open(CROC_SCORES_FILE, "r", encoding="utf-8"))
         except Exception:
             CROC_SCORES = {}
-def _croc_db_init():
-    # ensure folder exists
-    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS scores (
-                chat_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                name    TEXT NOT NULL,
-                points  REAL NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, user_id)
-            );
-        """)
-        conn.commit()
-
 
 def _croc_board(chat_id: int) -> str:
-    with _DB_LOCK, sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("""
-            SELECT name, points
-            FROM scores
-            WHERE chat_id = ?
-            ORDER BY points DESC
-            LIMIT 15;
-        """, (str(chat_id),)).fetchall()
-    if not rows:
-        return "Пока нет очков. Сыграйте раунд командой /croc ✨"
+    c = str(chat_id)
+    if not CROC_SCORES.get(c):
+        return "Пока нет очков. Запустите раунд: /croc ✨"
+    arr = [(v["points"], v["name"]) for v in CROC_SCORES[c].values()]
+    arr.sort(key=lambda x: x[0], reverse=True)
     lines = ["🏆 *Рейтинг чата:*"]
-    for i, (name, pts) in enumerate(rows, start=1):
+    for i, (pts, name) in enumerate(arr[:15], start=1):
         lines.append(f"{i}. {name} — *{pts:.1f}*")
     return "\n".join(lines)
-
 
 # ===== PREDICTIONS CONFIG (hard-coded) =====
 # Map Telegram user_id -> real name (in Russian). Fill your people here:
@@ -231,7 +178,6 @@ REAL_NAMES: dict[int, str] = {
      7687350164: "Мээрим",
      987503187: "Айганыш",
      862779556: "Айдана",
-     7687350164: "Мээрим",
     
 }
 
@@ -1834,153 +1780,6 @@ async def croc_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-# ========= SECRET PM (popup in group, no DM) =========
-# Allows: reply with /pm <text> or /pm <text_mention> <text>
-# Shows a button in the group; only the intended user can open it.
-from datetime import datetime, timedelta  # already imported above, ok to duplicate import in Python
-PM_CB_PREFIX = "pm"                   # callback prefix
-PM_TTL = timedelta(hours=6)           # how long a secret stays valid
-
-# token -> payload dict
-_PM_STORE: dict[str, dict] = {}  # {"from_id": int, "to_id": int, "text": str, "created": datetime}
-
-def _pm_cleanup():
-    now = datetime.utcnow()
-    stale = [tok for tok, v in _PM_STORE.items() if now - v["created"] > PM_TTL]
-    for tok in stale:
-        _PM_STORE.pop(tok, None)
-
-def _pm_truncate_for_alert(s: str) -> str:
-    # Telegram popup (show_alert=True) is short; keep it safe (~190 chars)
-    s = (s or "").strip()
-    if len(s) <= 190:
-        return s
-    return s[:187] + "…"
-
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton  # already imported above, ok to reference
-from telegram.constants import ChatType, ParseMode
-from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
-import html
-
-async def pm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    _pm_cleanup()
-    msg = update.effective_message
-    chat = update.effective_chat
-
-    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        await msg.reply_text("Используй /pm в группе.")
-        return
-
-    # 1) Prefer reply → recipient is reply author
-    target_user = None
-    if msg.reply_to_message and msg.reply_to_message.from_user:
-        target_user = msg.reply_to_message.from_user
-
-    # 2) Try TEXT_MENTION (tap the name so Telegram embeds the user object)
-    if not target_user:
-        for ent in (msg.entities or []):
-            if ent.type == MessageEntity.TEXT_MENTION and ent.user:
-                target_user = ent.user
-                # remove that mention token from the text body
-                # (optional; not strictly necessary because we read after command)
-                break
-
-    # 3) Try numeric user id as first arg (e.g., /pm 123456789 hello)
-    if not target_user and context.args:
-        first = context.args[0]
-        if first.isdigit():
-            try:
-                member = await context.bot.get_chat_member(chat.id, int(first))
-                target_user = member.user
-                context.args = context.args[1:]  # drop the id from args
-            except Exception:
-                pass
-
-    if not target_user:
-        await msg.reply_text(
-            "Кого шепнуть? Ответь на его сообщение с /pm или вставь текст-упоминание (не просто @username)."
-        )
-        return
-
-    # Secret text (everything after the command)
-    if msg.reply_to_message:
-        pieces = (msg.text or "").split(maxsplit=1)
-        secret = pieces[1].strip() if len(pieces) > 1 else ""
-    else:
-        secret = " ".join(context.args).strip()
-
-    if not secret:
-        await msg.reply_text("Напиши секрет после /pm. Пример: /pm это секретное сообщение")
-        return
-
-    # (Keep your validation above ...)
-    if not secret:
-        await msg.reply_text("Напиши секрет после /pm. Пример: /pm это секретное сообщение")
-        return
-
-    # 💥 NEW: delete the user's command message so the secret isn't visible in chat
-    try:
-        await msg.delete()
-    except Exception:
-        # If bot lacks delete rights, we just proceed (but warn in logs if you like)
-        pass
-
-    
-    # Store payload
-    token = uuid.uuid4().hex[:16]
-    _PM_STORE[token] = {
-        "from_id": update.effective_user.id if update.effective_user else 0,
-        "to_id": target_user.id,
-        "text": secret,
-        "created": datetime.utcnow(),
-    }
-
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔐 Open secret", callback_data=f"{PM_CB_PREFIX}:{token}")
-    ]])
-
-    await update.effective_chat.send_message(
-    "🔏 <b>Секрет готов.</b> Только адресат сможет открыть.",
-    reply_markup=kb,
-    parse_mode="HTML",
-    disable_web_page_preview=True,
-    )
-
-async def pm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q or not q.data or not q.from_user:
-        return
-
-    try:
-        prefix, token = q.data.split(":")
-    except ValueError:
-        return
-    if prefix != PM_CB_PREFIX:
-        return
-
-    payload = _PM_STORE.get(token)
-    if not payload:
-        await q.answer("⏳ Секрет истёк или уже был открыт.", show_alert=True)
-        return
-
-    # Only intended recipient can open
-    if q.from_user.id != payload["to_id"]:
-        await q.answer("🚫 Этот секрет не для тебя.", show_alert=True)
-        return
-
-    # Show the secret as a popup (no DM)
-    text = _pm_truncate_for_alert(payload["text"])
-    await q.answer(f"🔏 Секрет:\n\n{text}", show_alert=True)
-
-    # Optional: remove the button so it can't be re-opened
-    try:
-        await q.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    # Remove from store
-    _PM_STORE.pop(token, None)
-
 
 
 
@@ -1988,23 +1787,22 @@ async def pm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =======================
 # MAIN
 # =======================
-    def main():
-     _croc_db_init()
+def main():
     # Load Croc scores once
     _croc_load_scores()
-    
+
     # --- App / scheduler ---
     scheduler = AsyncIOScheduler(timezone=BISHKEK_TZ)
     job_queue = JobQueue()
     job_queue.scheduler = scheduler
-    
+
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
         .job_queue(job_queue)
         .build()
     )
-    
+
     # =========================
     # Command handlers (your existing ones)
     # =========================
@@ -2027,10 +1825,7 @@ async def pm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app.add_handler(CommandHandler(["say", "echo"], say))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
-        # --- Secret PM (popup) ---
-    app.add_handler(CommandHandler("pm", pm_cmd, filters=filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP))
-    
-    
+
     # =========================
     # Crocodile (PUT BEFORE generic callbacks/text handlers)
     # =========================
@@ -2043,14 +1838,12 @@ async def pm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             croc_group_listener,
         )
     )
-    # Secret PM callback (must be BEFORE the generic CallbackQueryHandler(button))
-    app.add_handler(CallbackQueryHandler(pm_callback, pattern=r"^pm:"))
-    
+
     # =========================
     # Your generic callback handler (must be AFTER croc_callback above)
-    # =======================
+    # =========================
     app.add_handler(CallbackQueryHandler(button))
-    
+
     # =========================
     # Remaining handlers (keep as needed)
     # =========================
@@ -2062,10 +1855,10 @@ async def pm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sms_purge,
         )
     )
-    
+
     logging.getLogger(__name__).info("🤖 Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
-    
-    
-    if __name__ == "__main__":
-        main()
+
+
+if __name__ == "__main__":
+    main()
