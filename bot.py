@@ -2306,13 +2306,14 @@ def main():
     # =========================
     # Your generic callback handler (must be AFTER croc_callback above)
     # =========================
+    app.add_handler(CommandHandler("secret", secret_cmd))
+    app.add_handler(CallbackQueryHandler(secret_reveal_cb, pattern=r"^sc\|"))
     app.add_handler(CallbackQueryHandler(button))
 
     # =========================
     # Remaining handlers (keep as needed)
     # =========================
-    app.add_handler(CommandHandler("secret", secret_cmd))
-    app.add_handler(CallbackQueryHandler(secret_reveal_cb, pattern=r"^sc\|"))
+
     # Add to existing /start handler or create new one:
     app.add_handler(CommandHandler("start", start_with_token))
     app.add_handler(CommandHandler("qotd", qotd))
