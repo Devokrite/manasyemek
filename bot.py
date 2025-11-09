@@ -5,7 +5,10 @@ import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
-
+import hashlib
+import hmac
+import secrets
+import json
 import requests
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -795,6 +798,301 @@ def media_group_for(dishes: list[dict]):
     return media
 
 # ======================= ADDED COMMANDS 
+# ===================== /SECRET COMMAND =====================
+# Secure ephemeral messaging for groups
+# Paste this entire block into your bot (15).py or bot (16).py
+
+import hashlib
+import hmac
+import secrets
+import json
+from datetime import datetime, timedelta
+from typing import Optional
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
+
+# --- Configuration ---
+SECRET_HMAC_KEY = secrets.token_bytes(32)  # Generate once per bot session
+SECRET_TTL_MINUTES = 30
+SECRET_MAX_ALERT_LEN = 200
+
+# --- In-Memory Store ---
+_SECRET_STORE: dict[str, dict] = {}
+# Structure: {
+#   "secret_id": {
+#     "recipient_id": int,
+#     "secret": str,
+#     "expires_at": datetime,
+#     "sender_name": str
+#   }
+# }
+
+def _generate_secret_id() -> str:
+    """Generate a short, unique secret ID."""
+    return secrets.token_urlsafe(12)
+
+def _create_hmac_token(secret_id: str, recipient_id: int) -> str:
+    """Generate HMAC token for deep-link validation."""
+    data = f"{secret_id}:{recipient_id}".encode()
+    return hmac.new(SECRET_HMAC_KEY, data, hashlib.sha256).hexdigest()[:32]
+
+def _validate_hmac_token(secret_id: str, recipient_id: int, token: str) -> bool:
+    """Validate HMAC token."""
+    expected = _create_hmac_token(secret_id, recipient_id)
+    return hmac.compare_digest(expected, token)
+
+def _cleanup_expired():
+    """Remove expired secrets."""
+    now = datetime.now()
+    expired = [sid for sid, data in _SECRET_STORE.items() if data["expires_at"] < now]
+    for sid in expired:
+        del _SECRET_STORE[sid]
+
+def create_secret(recipient_id: int, text: str, sender_name: str) -> tuple[str, str, bool, str]:
+    """
+    Store a secret and return (secret_id, truncated_text, needs_dm, token).
+    
+    Returns:
+        - secret_id: Unique identifier
+        - truncated_text: Text for alert (max 200 chars)
+        - needs_dm: True if text exceeds alert limit
+        - token: HMAC token for deep-link
+    """
+    _cleanup_expired()
+    
+    secret_id = _generate_secret_id()
+    expires_at = datetime.now() + timedelta(minutes=SECRET_TTL_MINUTES)
+    
+    _SECRET_STORE[secret_id] = {
+        "recipient_id": recipient_id,
+        "secret": text,
+        "expires_at": expires_at,
+        "sender_name": sender_name
+    }
+    
+    # Truncate if needed
+    needs_dm = len(text) > SECRET_MAX_ALERT_LEN
+    truncated = text[:SECRET_MAX_ALERT_LEN] + "…" if needs_dm else text
+    
+    token = _create_hmac_token(secret_id, recipient_id)
+    
+    return secret_id, truncated, needs_dm, token
+
+def get_secret(secret_id: str) -> Optional[dict]:
+    """Retrieve secret if exists and not expired."""
+    _cleanup_expired()
+    return _SECRET_STORE.get(secret_id)
+
+# --- Command Handlers ---
+
+async def secret_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /secret @username your secret message
+    OR reply to someone with: /secret your secret message
+    """
+    msg = update.effective_message
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    if not msg or not user:
+        return
+    
+    # Only works in groups
+    if chat.type not in ("group", "supergroup"):
+        await msg.reply_text("🔐 /secret works only in groups.")
+        return
+    
+    # Parse args
+    args = context.args or []
+    text = msg.text or ""
+    
+    # Determine recipient
+    recipient_id = None
+    recipient_username = None
+    secret_text = None
+    
+    # Option 1: Reply mode
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        recipient = msg.reply_to_message.from_user
+        recipient_id = recipient.id
+        recipient_username = recipient.username or recipient.full_name
+        # Secret is everything after /secret
+        secret_text = " ".join(args) if args else None
+    
+    # Option 2: @mention mode
+    elif args and args[0].startswith("@"):
+        recipient_username = args[0].lstrip("@")
+        secret_text = " ".join(args[1:]) if len(args) > 1 else None
+        
+        # Try to find user ID from entities
+        for entity in (msg.entities or []):
+            if entity.type == "mention":
+                # Can't get ID from plain @mention, will need manual lookup
+                # For now, we'll use username only
+                pass
+            elif entity.type == "text_mention" and entity.user:
+                recipient_id = entity.user.id
+                recipient_username = entity.user.username or entity.user.full_name
+                break
+    
+    # Validation
+    if not recipient_username:
+        await msg.reply_text("❌ Reply to someone or use: /secret @username your message")
+        return
+    
+    if not secret_text or len(secret_text.strip()) == 0:
+        await msg.reply_text("❌ Secret message cannot be empty.")
+        return
+    
+    # Don't allow self-secrets
+    if recipient_id and recipient_id == user.id:
+        await msg.reply_text("❌ You can't send secrets to yourself.")
+        return
+    
+    # If we don't have recipient_id (plain @mention), try to resolve it
+    if not recipient_id:
+        try:
+            # Try to get chat member by username
+            # Note: This may not always work due to Telegram API limitations
+            member = await context.bot.get_chat_member(chat.id, f"@{recipient_username}")
+            recipient_id = member.user.id
+        except Exception:
+            # Fallback: store with username only (less secure but functional)
+            # For production, you might want to require reply or text_mention
+            await msg.reply_text(f"⚠️ Couldn't verify @{recipient_username}. Reply to their message instead.")
+            return
+    
+    # Create secret
+    sender_name = user.full_name or user.username or "Someone"
+    secret_id, truncated, needs_dm, token = create_secret(
+        recipient_id, secret_text, sender_name
+    )
+    
+    # Build inline keyboard
+    buttons = [[InlineKeyboardButton("👀 Reveal", callback_data=f"sc|{secret_id}")]]
+    
+    if needs_dm:
+        bot_username = (await context.bot.get_me()).username
+        deep_link = f"https://t.me/{bot_username}?start={secret_id}_{token}"
+        buttons.append([InlineKeyboardButton("✉️ Read in DM", url=deep_link)])
+    
+    keyboard = InlineKeyboardMarkup(buttons)
+    
+    # Send public message
+    await msg.reply_text(
+        f"🔐 Secret for @{recipient_username} — only they can tap to view",
+        reply_markup=keyboard
+    )
+    
+    # Delete original command (optional, for privacy)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+async def secret_reveal_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle 'Reveal' button tap."""
+    q = update.callback_query
+    await q.answer(cache_time=0)  # Acknowledge immediately
+    
+    if not q or not q.from_user:
+        return
+    
+    try:
+        # Parse callback data: sc|<secret_id>
+        _, secret_id = q.data.split("|", 1)
+    except Exception:
+        await q.answer("❌ Invalid secret.", show_alert=True)
+        return
+    
+    # Retrieve secret
+    secret_data = get_secret(secret_id)
+    
+    if not secret_data:
+        await q.answer("❌ Secret expired or not found.", show_alert=True)
+        return
+    
+    # Check if tapper is the intended recipient
+    if q.from_user.id != secret_data["recipient_id"]:
+        await q.answer("🚫 This secret isn't for you.", show_alert=True)
+        return
+    
+    # Reveal secret (ephemeral alert)
+    secret_text = secret_data["secret"]
+    sender_name = secret_data["sender_name"]
+    
+    # Truncate if too long for alert
+    if len(secret_text) > SECRET_MAX_ALERT_LEN:
+        display_text = secret_text[:SECRET_MAX_ALERT_LEN] + "…\n\n[Tap 'Read in DM' for full message]"
+    else:
+        display_text = secret_text
+    
+    await q.answer(
+        f"🔓 From {sender_name}:\n\n{display_text}",
+        show_alert=True
+    )
+
+async def start_with_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /start <token> for reading full secrets in DM.
+    Token format: <secret_id>_<hmac>
+    """
+    msg = update.effective_message
+    user = update.effective_user
+    
+    if not msg or not user:
+        return
+    
+    # Only process in private chats
+    if update.effective_chat.type != "private":
+        return
+    
+    # Check if this is a secret deep-link
+    if not context.args or not context.args[0]:
+        return
+    
+    token_str = context.args[0]
+    
+    # Parse token: secret_id_hmac
+    try:
+        secret_id, hmac_token = token_str.split("_", 1)
+    except ValueError:
+        # Not a secret token, ignore (could be other /start usage)
+        return
+    
+    # Retrieve secret
+    secret_data = get_secret(secret_id)
+    
+    if not secret_data:
+        await msg.reply_text("❌ Secret expired or not found.")
+        return
+    
+    # Validate HMAC
+    if not _validate_hmac_token(secret_id, secret_data["recipient_id"], hmac_token):
+        await msg.reply_text("❌ Invalid secret link.")
+        return
+    
+    # Check if opener is the intended recipient
+    if user.id != secret_data["recipient_id"]:
+        await msg.reply_text("🚫 This secret isn't for you.")
+        return
+    
+    # Send full secret in DM
+    secret_text = secret_data["secret"]
+    sender_name = secret_data["sender_name"]
+    
+    # Split into chunks if very long (Telegram limit: 4096)
+    max_len = 4000
+    if len(secret_text) <= max_len:
+        await msg.reply_text(f"🔓 *Secret from {sender_name}:*\n\n{secret_text}", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await msg.reply_text(f"🔓 *Secret from {sender_name}:*", parse_mode=ParseMode.MARKDOWN)
+        for i in range(0, len(secret_text), max_len):
+            chunk = secret_text[i:i+max_len]
+            await msg.reply_text(chunk)
+
+# ===================== END /SECRET COMMAND =====================
 def _load_font(size: int) -> ImageFont.FreeTypeFont:
     # Try DejaVu (bundled with Pillow). Fallback to default bitmap font.
     try:
@@ -1936,7 +2234,10 @@ def main():
             sms_purge,
         )
     )
-
+    app.add_handler(CommandHandler("secret", secret_cmd))
+    app.add_handler(CallbackQueryHandler(secret_reveal_cb, pattern=r"^sc\|"))
+    # Add to existing /start handler or create new one:
+    app.add_handler(CommandHandler("start", start_with_token))
     logging.getLogger(__name__).info("🤖 Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
 
