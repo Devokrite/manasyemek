@@ -75,7 +75,73 @@ BASE_URL = "https://beslenme.manas.edu.kg"
 MENU_URL = f"{BASE_URL}/menu"
 BISHKEK_TZ = pytz_timezone("Asia/Bishkek")
 OWNER_IDS = {838410534}
+# ====== SCHEDULE (edit these as you like) ======
+# Keys must be Python weekday numbers: Monday=0 ... Sunday=6
+SCHEDULE: dict[int, list[str]] = {
+    0: [  # Понедельник
+        "08:55–09:40 КЫРГЫЗСКИЙ ЯЗЫК И ЛИТЕРАТУРА I — Бакытбек Джунусалиев (ИИБФ 317)",
+        "09:50–10:35 КЫРГЫЗСКИЙ ЯЗЫК И ЛИТЕРАТУРА I — Бакытбек Джунусалиев (ИИБФ 317)",
+        "11:40–12:25 ОБЩАЯ БУХГАЛТЕРИЯ I  — Уланбек Молдокматов (ИИБФ 326)",
+        "13:30–14:15 ОБЩАЯ БУХГАЛТЕРИЯ I  — Уланбек Молдокматов (ИИБФ 326)",
+        "14:25–15:10 ОБЩАЯ БУХГАЛТЕРИЯ I  — Уланбек Молдокматов (ИИБФ 326)",
+    ],
+    1: [  # Вторник
+        "08:55–09:40 МАТЕМАТИКА I — Мирбек Токтосунов (ИИБФ 324)",
+        "09:50–10:35 МАТЕМАТИКА I — Мирбек Токтосунов (ИИБФ 324)",
+        "11:40–12:25 ФИЗИЧЕСКАЯ КУЛЬТУРА I — Салтанат Кайкы (КССБ спортзал №01)",
+        "13:30–14:15 ФИЗИЧЕСКАЯ КУЛЬТУРА I — Салтанат Кайкы (КССБ спортзал №01)",
+        "14:25–15:10 ФИЗИЧЕСКАЯ КУЛЬТУРА I — Салтанат Кайкы (КССБ спортзал №01)",
+    ],
+    2: [  # Среда
+        "08:55–09:40 МАТЕМАТИКА I — Мирбек Токтосунов (ИИБФ 324)",
+        "09:50–10:35 МАТЕМАТИКА I — Мирбек Токтосунов (ИИБФ 324)",
+        "11:40–12:25 ВВЕДЕНИЕ В МЕНЕДЖМЕНТ  — Азамат Максудунов (ИИБФ 323)",
+        "13:30–14:15 ВВЕДЕНИЕ В МЕНЕДЖМЕНТ  — Азамат Максудунов (ИИБФ 323)",
+    ],
+    3: [],  # Четверг — нет занятий
+    4: [  # Пятница
+        "08:55–09:40 ВВЕДЕНИЕ В ПРАВО — Медербек Оролбаев (ИИБФ 521)",
+        "09:50–10:35 ВВЕДЕНИЕ В ПРАВО — Медербек Оролбаев (ИИБФ 321)",
+        "10:45–11:30 ВВЕДЕНИЕ В ПРАВО — Медербек Оролбаев (ИИБФ 321)",
+        "12:35–13:20 ВВЕДЕНИЕ В ЭКОНОМИКУ I — Джунус Ганиев (ИИБФ А-205)",
+        "14:25–15:10 ВВЕДЕНИЕ В ЭКОНОМИКУ I — Джунус Ганиев (ИИБФ А-205)",
+        "16:15–17:00 ВВЕДЕНИЕ В ЭКОНОМИКУ I — Джунус Ганиев (ИИБФ А-205)",
+    ],
+    5: ["Отдых"],  # Суббота
+    6: ["Отдых"],  # Воскресенье
+}
 
+DAY_NAMES_RU = [
+    "Понедельник",
+    "Вторник",
+    "Среда",
+    "Четверг",
+    "Пятница",
+    "Суббота",
+    "Воскресенье",
+]
+
+def _fmt_day_lines(dt: datetime) -> str:
+    wd = dt.weekday()
+    title = f"*📅 {DAY_NAMES_RU[wd]} ({dt.strftime('%d.%m')})*"
+    items = SCHEDULE.get(wd, [])
+    if not items:
+        return f"{title}\n• Занятий нет 🙂"
+    return title + "\n" + "\n".join(f"• {x}" for x in items)
+
+def _week_bounds(dt: datetime) -> tuple[datetime, datetime]:
+    monday = dt - timedelta(days=dt.weekday())
+    sunday = monday + timedelta(days=6)
+    return monday, sunday
+
+def _fmt_week(dt: datetime) -> str:
+    monday, sunday = _week_bounds(dt)
+    cur = monday
+    parts = []
+    for _ in range(7):
+        parts.append(_fmt_day_lines(cur))
+        cur += timedelta(days=1)
+    return "\n\n".join(parts)
 
 # ===== Crocodile Game CONFIG =====
 CROC_WORDS = [
@@ -94,7 +160,7 @@ CROC_WORDS = [
     "Бухучет","Лабораторная физика","Акжоленок","Фараончик","Айдай","Йоклама",
     "Кпоп","Таккаунт","Мээрим","Кайратик","Омск","Верю не верю",
     "Сушеные бананы","Шалун","Шалунишка","Шлюшка","Бисмиллях","Карапуз",
-    "Книга братан","Азиямолл","Алаарча","Квест","Утипути","окр",
+    "Книга братан","Азиямолл","Алаарча","Квест","Утипути","окр", "Алибургер",
     "Галушка","Молоко","Резак","Четверг","Макаронсы","Мохнатость","Демирбанк","Инженеры",
     "Мужчина","Боксер","Айпери","Фит","Мазда","Пальма","Мохнатость","Окр","Айслатте на миндальном","Априорность","Апостериорности",
     "Ношпа","Миллениал", "Шредер","Мегамозг","Сигмабой","Сигмагерл","Попыт","Симплдимпл","Егор крид","Эдвард","Бродяга","Джейкоб","Оборотень","Кравосися","Гольф",
@@ -799,6 +865,49 @@ def media_group_for(dishes: list[dict]):
         if d.get("img"):
             media.append(InputMediaPhoto(media=d["img"]))  # <-- no caption
     return media
+
+# ===================== /schedule =====================
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = [
+        [InlineKeyboardButton("Сегодня", callback_data="sch:today")],
+        [InlineKeyboardButton("Завтра", callback_data="sch:tomorrow")],
+        [InlineKeyboardButton("Вся неделя", callback_data="sch:week")],
+    ]
+    await update.effective_message.reply_text(
+        "📚 Расписание: выберите период ↓",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+async def schedule_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    now = datetime.now(BISHKEK_TZ)
+    data = q.data or ""
+
+    if data == "sch:today":
+        text = _fmt_day_lines(now)
+        await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+
+    elif data == "sch:tomorrow":
+        text = _fmt_day_lines(now + timedelta(days=1))
+        await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+
+    elif data == "sch:week":
+        text = _fmt_week(now)
+        # long text → safer to send as a fresh message
+        try:
+            await q.edit_message_text("📅 Вся неделя:")
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=q.message.chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+
+
+
+
 
 # ======================= ADDED COMMANDS 
 # ===================== QOTD & COINFLIP =====================
@@ -2289,11 +2398,14 @@ def main():
     app.add_handler(CommandHandler(["say", "echo"], say))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
+    app.add_handler(CommandHandler(["schedule", "sch"], schedule_cmd))
+
 
     # =========================
     # Crocodile (PUT BEFORE generic callbacks/text handlers)
     # =========================
     app.add_handler(CommandHandler("croc", croc_cmd))
+    
     app.add_handler(CommandHandler("rating", croc_rating))
     app.add_handler(CallbackQueryHandler(croc_callback, pattern=r"^croc:"))
     app.add_handler(
@@ -2308,6 +2420,7 @@ def main():
     # =========================
     app.add_handler(CommandHandler("secret", secret_cmd))
     app.add_handler(CallbackQueryHandler(secret_reveal_cb, pattern=r"^sc\|"))
+    app.add_handler(CallbackQueryHandler(schedule_cb, pattern=r"^sch:"))
     app.add_handler(CallbackQueryHandler(button))
 
     # =========================
