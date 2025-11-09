@@ -1357,318 +1357,399 @@ async def sms_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
    
-# ===================== STICKER QUOTE (emoji-aware, single send) =====================
+# ===================== ENHANCED STICKER QUOTE =====================
+# Replace your existing stickerquote function with this enhanced version
+
 from io import BytesIO
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageOps, features
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
 from telegram import Update
 from telegram.ext import ContextTypes
+import asyncio
 
-# --- Emoji-aware font loader and text drawing helpers ---
-import unicodedata
+# --- Configuration ---
+STICKER_MAX_SIZE = 512  # Telegram sticker size limit
+AVATAR_SIZE = 350
+TEXT_PADDING = 56
+BUBBLE_RADIUS = 42
+LINE_SPACING = 18
 
-def _load_fonts_with_emoji(size: int):
-    """
-    Loads base text font (DejaVuSans.ttf).
-    Tries AppleColorEmoji.ttf at bitmap strikes; if none works -> emoji_font=None (image fallback).
-    """
-    base_path = Path(__file__).parent / "fonts" / "DejaVuSans.ttf"
-    emoji_path = Path(__file__).parent / "fonts" / "AppleColorEmoji.ttf"
+# Colors
+BG_DARK = (18, 18, 18, 255)
+BUBBLE_DARK = (34, 34, 34, 255)
+NAME_COLOR = (170, 152, 255, 255)
+TEXT_COLOR = (245, 245, 245, 255)
+META_COLOR = (200, 200, 200, 255)
+OVERLAY_BG = (0, 0, 0, 180)  # Semi-transparent black for image overlays
 
-    base_font = ImageFont.truetype(str(base_path), size=size)
+# --- Helper Functions ---
 
-    emoji_font = None
-    if emoji_path.exists():
-        STRIKES = [size, 160, 144, 128, 120, 112, 96, 72, 64, 48, 40, 36, 32]
-        last_err = None
-        for s in STRIKES:
-            try:
-                emoji_font = ImageFont.truetype(str(emoji_path), size=s)
-                print(f"✅ AppleColorEmoji.ttf loaded at strike {s}px")
-                break
-            except Exception as e:
-                last_err = e
-        if emoji_font is None:
-            print(f"⚠️ Could not load AppleColorEmoji.ttf at any strike. Using image fallback. Last error: {last_err}")
-    else:
-        print("⚠️ Emoji font not found in /fonts/, using image fallback.")
-
-    return base_font, emoji_font
-# --- Twemoji image fallback (CDN + tiny cache) ---
-import requests
-from io import BytesIO
-
-_TWEMOJI_BASE = "https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/"
-_EMOJI_IMG_CACHE = {}  # (cluster, px) -> PIL Image
-
-def _emoji_codepoints(cluster: str) -> str:
-    return "-".join(f"{ord(c):x}" for c in cluster)
-
-def _get_emoji_image(cluster: str, px: int):
-    key = (cluster, px)
-    if key in _EMOJI_IMG_CACHE:
-        return _EMOJI_IMG_CACHE[key]
-    url = f"{_TWEMOJI_BASE}{_emoji_codepoints(cluster)}.png"
+def _load_font_safe(size: int) -> ImageFont.FreeTypeFont:
+    """Load DejaVuSans font with fallback."""
     try:
-        r = requests.get(url, timeout=4)
-        r.raise_for_status()
-        im = Image.open(BytesIO(r.content)).convert("RGBA")
-        if im.size[0] != px:
-            im = im.resize((px, px), Image.LANCZOS)
+        font_path = Path(__file__).parent / "fonts" / "DejaVuSans.ttf"
+        if font_path.exists():
+            return ImageFont.truetype(str(font_path), size=size)
     except Exception:
-        im = Image.new("RGBA", (px, px), (0,0,0,0))
-    _EMOJI_IMG_CACHE[key] = im
-    return im
-
-
-# --- Simple grapheme-ish clustering so flags, ZWJ sequences, VS16 hearts render ---
-def _is_ri(cp):   # regional indicator (flags)
-    return 0x1F1E6 <= cp <= 0x1F1FF
-def _is_vs16(cp): # variation selector-16
-    return cp == 0xFE0F
-def _is_zwj(cp):  # zero width joiner
-    return cp == 0x200D
-
-def _grapheme_iter(text: str):
-    """
-    Simple grapheme iterator:
-    - pairs regional indicators for flags
-    - keeps base+VS16 together
-    - keeps ZWJ sequences chained
-    """
-    i, n = 0, len(text)
-    while i < n:
-        start = i
-        cp = ord(text[i])
-
-        # Flag: RI + RI
-        if _is_ri(cp) and i + 1 < n and _is_ri(ord(text[i+1])):
-            yield text[i:i+2]
-            i += 2
+        pass
+    
+    # Try system fonts
+    for path in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "C:\\Windows\\Fonts\\arial.ttf",
+    ]:
+        try:
+            if Path(path).exists():
+                return ImageFont.truetype(path, size=size)
+        except Exception:
             continue
+    
+    return ImageFont.load_default()
 
-        # Base + optional VS16
-        i += 1
-        if i < n and _is_vs16(ord(text[i])):
-            i += 1
 
-        # Chain ZWJ sequences: ... + ZWJ + next cluster
-        while i < n and _is_zwj(ord(text[i])):
-            j = i + 1
-            if j < n:
-                j += 1
-                if j < n and _is_vs16(ord(text[j])):
-                    j += 1
-            i = j
-
-        yield text[start:i]
-
-def _draw_text_with_emoji_any(draw: ImageDraw.ImageDraw, img: Image.Image,
-                              x: int, y: int, text: str,
-                              base_font: ImageFont.FreeTypeFont,
-                              emoji_font: ImageFont.FreeTypeFont | None,
-                              fill=(255,255,255,255),
-                              line_spacing=0):
-    """Draw line-by-line; use emoji_font when available, otherwise paste Twemoji images."""
-    bb = base_font.getbbox("Ag")
-    line_h = (bb[3] - bb[1]) if bb else int(base_font.size * 1.2)
-
-    cursor_y = y
-    for line in text.split("\n"):
-        cursor_x = x
-        for cluster in _grapheme_iter(line):
-            has_emoji = any((
-                0x1F300 <= ord(c) <= 0x1FAFF or
-                0x2600  <= ord(c) <= 0x27BF  or
-                0x1F1E6 <= ord(c) <= 0x1F1FF or
-                ord(c) in (0xFE0F, 0x200D)
-            ) for c in cluster)
-
-            if has_emoji:
-                if emoji_font is not None:
-                    draw.text((cursor_x, cursor_y), cluster, font=emoji_font, fill=fill, embedded_color=True)
-                    cursor_x += draw.textlength(cluster, font=emoji_font)
-                else:
-                    px = base_font.size
-                    emo = _get_emoji_image(cluster, px)
-                    # small baseline nudge so images align with text
-                    img.paste(emo, (int(cursor_x), int(cursor_y - int(px*0.14))), emo)
-                    cursor_x += emo.size[0]
-            else:
-                draw.text((cursor_x, cursor_y), cluster, font=base_font, fill=fill, embedded_color=True)
-                cursor_x += draw.textlength(cluster, font=base_font)
-        cursor_y += line_h + line_spacing
-
-# --- tiny word-wrap helper (measure with base font) ---
-def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+def _wrap_text_smart(draw: ImageDraw.ImageDraw, text: str, 
+                     font: ImageFont.FreeTypeFont, max_width: int) -> str:
+    """Wrap text to fit within max_width."""
     words = text.split()
     if not words:
         return ""
-    lines, cur = [], words[0]
-    for w in words[1:]:
-        if draw.textlength(cur + " " + w, font=font) <= max_width:
-            cur += " " + w
+    
+    lines = []
+    current_line = words[0]
+    
+    for word in words[1:]:
+        test_line = f"{current_line} {word}"
+        if draw.textlength(test_line, font=font) <= max_width:
+            current_line = test_line
         else:
-            lines.append(cur)
-            cur = w
-    lines.append(cur)
+            lines.append(current_line)
+            current_line = word
+    
+    lines.append(current_line)
     return "\n".join(lines)
 
-# ===================== MAIN COMMAND =====================
-async def stickerquote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    bot = context.bot
 
-    # Source: replied message text/caption or args
-    target = msg.reply_to_message
-    if target and (target.text or target.caption):
-        text_to_quote = target.text or target.caption
-        author = target.from_user
-    else:
-        text_to_quote = " ".join(context.args).strip()
-        author = msg.from_user
-    if not text_to_quote:
-        await msg.reply_text("Reply to a message with /stickerquote or use: /stickerquote your text")
-        return
+async def _fetch_avatar(bot, user, size: int) -> Image.Image:
+    """Fetch user avatar as circular image with fallback."""
+    try:
+        photos = await bot.get_user_profile_photos(user_id=user.id, limit=1)
+        if photos.total_count > 0:
+            file = await bot.get_file(photos.photos[0][-1].file_id)
+            avatar_bytes = await file.download_as_bytearray()
+            img = Image.open(BytesIO(avatar_bytes)).convert("RGBA")
+            
+            # Crop to square and resize
+            img = ImageOps.fit(img, (size, size), method=Image.LANCZOS, centering=(0.5, 0.5))
+            
+            # Create circular mask
+            mask = Image.new("L", (size, size), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
+            img.putalpha(mask)
+            return img
+    except Exception as e:
+        print(f"Avatar fetch failed: {e}")
+    
+    # Fallback: create colored circle with initials
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((0, 0, size - 1, size - 1), fill=(96, 96, 160, 255))
+    
+    # Add initials
+    initials = ""
+    if user.first_name:
+        initials += user.first_name[0]
+    if user.last_name:
+        initials += user.last_name[0]
+    initials = initials.strip().upper() or "?"
+    
+    font = _load_font_safe(int(size * 0.45))
+    bbox = draw.textbbox((0, 0), initials, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    
+    draw.text(
+        ((size - text_width) / 2, (size - text_height) / 2 - 2),
+        initials,
+        font=font,
+        fill=(255, 255, 255, 255)
+    )
+    
+    return img
 
-    # Canvas + style
+
+def _create_text_sticker(avatar: Image.Image, display_name: str, 
+                         handle: str, text: str) -> Image.Image:
+    """Create a text-based quote sticker."""
     W = 2000
     PAD = 56
-    AV = 350
-
-    BG = (18, 18, 18, 255)
-    BUBBLE = (34, 34, 34, 255)
-    NAME_C = (170, 152, 255, 255)
-    TEXT_C = (245, 245, 245, 255)
-    META_C = (200, 200, 200, 255)
-
-    # Fonts (for measuring; emoji-aware fonts are loaded at draw time below)
-    font_name = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=140)
-    font_meta = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=90)
-    font_text = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=120)
-
-    # Scratch for measuring
-    temp = Image.new("RGBA", (W, 10), BG)
-    d0 = ImageDraw.Draw(temp)
-
-    display_name = author.full_name or (author.username and f"@{author.username}") or "Unknown"
-    handle = f"@{author.username}" if author.username else ""
+    AV = AVATAR_SIZE
+    
+    # Load fonts
+    font_name = _load_font_safe(140)
+    font_meta = _load_font_safe(90)
+    font_text = _load_font_safe(120)
+    
+    # Create base image
+    temp_img = Image.new("RGBA", (W, 10), BG_DARK)
+    temp_draw = ImageDraw.Draw(temp_img)
+    
+    # Calculate layout
     x_text = PAD + AV + 40
     y_top = PAD
-
-    # Bubble sizing
-    bubble_w = W - PAD - x_text
-    inner_pad = 56
-
-    content_w = bubble_w - inner_pad * 2
-    wrapped = _wrap_text(d0, text_to_quote, font_text, content_w)
-
-    text_bbox = d0.multiline_textbbox((0, 0), wrapped, font=font_text, spacing=18)
-    text_h = text_bbox[3] - text_bbox[1]
-    bubble_h = text_h + inner_pad * 2
-
-
-    # Bubble directly under name/handle (not tied to avatar height)
-    name_bbox = d0.textbbox((0, 0), display_name, font=font_name)
+    
+    # Name and handle dimensions
+    name_bbox = temp_draw.textbbox((0, 0), display_name, font=font_name)
     name_h = name_bbox[3] - name_bbox[1]
+    
     handle_h = 0
     if handle:
-        hb = d0.textbbox((0, 0), handle, font=font_meta)
-        handle_h = hb[3] - hb[1]
-    GAP_NAME = 20
-    by = y_top + name_h + (handle_h if handle else 0) + GAP_NAME
-        # >>> ADD THESE LINES BELOW <<<
-    # Vertical centering of the wrapped text block inside the bubble:
-    y_text_centered = by + (bubble_h - text_h) // 2
-    x_text_start = x_text + inner_pad
-    # >>> END ADD <<<
-
-    # Canvas height fits both bubble and avatar
+        handle_bbox = temp_draw.textbbox((0, 0), handle, font=font_meta)
+        handle_h = handle_bbox[3] - handle_bbox[1]
+    
+    # Bubble dimensions
+    bubble_w = W - PAD - x_text
+    inner_pad = TEXT_PADDING
+    content_w = bubble_w - inner_pad * 2
+    
+    # Wrap text
+    wrapped = _wrap_text_smart(temp_draw, text, font_text, content_w)
+    text_bbox = temp_draw.multiline_textbbox((0, 0), wrapped, font=font_text, spacing=LINE_SPACING)
+    text_h = text_bbox[3] - text_bbox[1]
+    bubble_h = text_h + inner_pad * 2
+    
+    # Calculate bubble position
+    gap_name = 20
+    by = y_top + name_h + (handle_h if handle else 0) + gap_name
+    
+    # Calculate final height
     H = max(by + bubble_h + PAD, PAD + AV + PAD)
-
-    # Base image
-    img = Image.new("RGBA", (W, H), BG)
+    
+    # Create final image
+    img = Image.new("RGBA", (W, H), BG_DARK)
     draw = ImageDraw.Draw(img)
+    
+    # Paste avatar
+    img.paste(avatar, (PAD, y_top), avatar)
+    
+    # Draw name
+    draw.text((x_text, y_top), display_name, font=font_name, fill=NAME_COLOR)
+    
+    # Draw handle if present
+    if handle and handle != display_name:
+        name_w = draw.textlength(display_name + "  ", font=font_name)
+        draw.text((x_text + name_w, y_top + 12), handle, font=font_meta, fill=META_COLOR)
+    
+    # Draw bubble
+    bubble = Image.new("RGBA", (bubble_w, bubble_h), (0, 0, 0, 0))
+    bubble_draw = ImageDraw.Draw(bubble)
+    bubble_draw.rounded_rectangle(
+        (0, 0, bubble_w, bubble_h),
+        radius=BUBBLE_RADIUS,
+        fill=BUBBLE_DARK
+    )
+    img.paste(bubble, (x_text, by), bubble)
+    
+    # Draw text (centered vertically in bubble)
+    y_text = by + (bubble_h - text_h) // 2
+    draw.multiline_text(
+        (x_text + inner_pad, y_text),
+        wrapped,
+        font=font_text,
+        fill=TEXT_COLOR,
+        spacing=LINE_SPACING
+    )
+    
+    return img
 
-    # Avatar (rounded)
-    async def _avatar(bot, user, size):
+
+def _create_image_overlay_sticker(base_image: Image.Image, avatar: Image.Image,
+                                  display_name: str, handle: str, text: str) -> Image.Image:
+    """Create a quote sticker by overlaying text on an existing image."""
+    # Resize base image if too large
+    max_dim = 2000
+    if max(base_image.size) > max_dim:
+        ratio = max_dim / max(base_image.size)
+        new_size = tuple(int(dim * ratio) for dim in base_image.size)
+        base_image = base_image.resize(new_size, Image.LANCZOS)
+    
+    img = base_image.convert("RGBA")
+    W, H = img.size
+    
+    # Create semi-transparent overlay at bottom
+    overlay_height = min(H // 2, 800)
+    overlay = Image.new("RGBA", (W, overlay_height), OVERLAY_BG)
+    
+    # Apply gradient effect for smoother transition
+    for y in range(overlay_height):
+        alpha = int(180 * (y / overlay_height))
+        for x in range(W):
+            r, g, b, _ = overlay.getpixel((x, y))
+            overlay.putpixel((x, y), (r, g, b, alpha))
+    
+    # Paste overlay at bottom
+    img.paste(overlay, (0, H - overlay_height), overlay)
+    
+    # Add avatar (smaller for overlay)
+    av_size = min(AVATAR_SIZE // 2, 200)
+    avatar_small = avatar.resize((av_size, av_size), Image.LANCZOS)
+    av_x = 30
+    av_y = H - overlay_height + 30
+    img.paste(avatar_small, (av_x, av_y), avatar_small)
+    
+    # Load fonts (smaller for overlay)
+    font_name = _load_font_safe(80)
+    font_meta = _load_font_safe(50)
+    font_text = _load_font_safe(70)
+    
+    draw = ImageDraw.Draw(img)
+    
+    # Text positioning
+    text_x = av_x + av_size + 20
+    text_y = av_y
+    
+    # Draw name
+    draw.text((text_x, text_y), display_name, font=font_name, fill=TEXT_COLOR)
+    
+    # Draw handle
+    if handle and handle != display_name:
+        name_bbox = draw.textbbox((0, 0), display_name, font=font_name)
+        name_h = name_bbox[3] - name_bbox[1]
+        draw.text((text_x, text_y + name_h + 5), handle, font=font_meta, fill=META_COLOR)
+        text_y += name_h + 50
+    else:
+        name_bbox = draw.textbbox((0, 0), display_name, font=font_name)
+        name_h = name_bbox[3] - name_bbox[1]
+        text_y += name_h + 30
+    
+    # Wrap and draw message text
+    max_text_w = W - text_x - 30
+    wrapped = _wrap_text_smart(draw, text, font_text, max_text_w)
+    draw.multiline_text(
+        (text_x, text_y),
+        wrapped,
+        font=font_text,
+        fill=TEXT_COLOR,
+        spacing=12
+    )
+    
+    return img
+
+
+def _resize_for_sticker(img: Image.Image) -> Image.Image:
+    """Resize image to Telegram sticker dimensions (max 512px)."""
+    w, h = img.size
+    max_side = STICKER_MAX_SIZE
+    
+    if max(w, h) > max_side:
+        scale = max_side / max(w, h)
+        new_size = (int(w * scale), int(h * scale))
+        img = img.resize(new_size, Image.LANCZOS)
+    
+    return img
+
+
+# --- Main Command ---
+
+async def stickerquote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Create a sticker-style quote from a message.
+    
+    Usage:
+    - Reply to any message with /stickerquote
+    - For text messages: creates a styled text sticker
+    - For images: overlays the quote on the image
+    """
+    msg = update.effective_message
+    bot = context.bot
+    
+    # Determine source message
+    target = msg.reply_to_message
+    if not target:
+        await msg.reply_text(
+            "❌ Please reply to a message with /stickerquote\n\n"
+            "Supported:\n"
+            "• Text messages → styled sticker\n"
+            "• Photos → overlay quote on image"
+        )
+        return
+    
+    author = target.from_user
+    if not author:
+        await msg.reply_text("❌ Cannot quote messages from channels or anonymous admins.")
+        return
+    
+    # Extract text
+    text_to_quote = target.text or target.caption or ""
+    if not text_to_quote:
+        await msg.reply_text("❌ The replied message has no text to quote.")
+        return
+    
+    # Truncate if too long
+    if len(text_to_quote) > 500:
+        text_to_quote = text_to_quote[:497] + "..."
+    
+    # Get author info
+    display_name = author.full_name or f"@{author.username}" or "Unknown"
+    handle = f"@{author.username}" if author.username else None
+    
+    # Send "processing" indicator
+    status_msg = await msg.reply_text("🎨 Creating sticker...")
+    
+    try:
+        # Fetch avatar
+        avatar = await _fetch_avatar(bot, author, AVATAR_SIZE)
+        
+        # Check if target has a photo
+        has_photo = False
+        base_image = None
+        
+        if target.photo:
+            # Download the largest photo
+            photo = target.photo[-1]
+            file = await bot.get_file(photo.file_id)
+            photo_bytes = await file.download_as_bytearray()
+            base_image = Image.open(BytesIO(photo_bytes)).convert("RGBA")
+            has_photo = True
+        
+        # Create sticker
+        if has_photo and base_image:
+            final_img = _create_image_overlay_sticker(
+                base_image, avatar, display_name, handle or "", text_to_quote
+            )
+        else:
+            final_img = _create_text_sticker(
+                avatar, display_name, handle or "", text_to_quote
+            )
+        
+        # Resize for Telegram
+        final_img = _resize_for_sticker(final_img)
+        
+        # Convert to WEBP
+        output = BytesIO()
+        output.name = "quote.webp"
+        final_img.save(output, format="WEBP", quality=95, method=6)
+        output.seek(0)
+        
+        # Send sticker
+        await bot.send_sticker(chat_id=update.effective_chat.id, sticker=output)
+        
+        # Delete status message
         try:
-            photos = await bot.get_user_profile_photos(user_id=user.id, limit=1)
-            if photos.total_count > 0:
-                file = await bot.get_file(photos.photos[0][-1].file_id)
-                b = await file.download_as_bytearray()
-                im = Image.open(BytesIO(b)).convert("RGBA")
-                im = ImageOps.fit(im, (size, size), method=Image.LANCZOS, centering=(0.5, 0.5))
-                m = Image.new("L", (size, size), 0)
-                ImageDraw.Draw(m).ellipse((0, 0, size, size), fill=255)
-                im.putalpha(m)
-                return im
+            await status_msg.delete()
         except Exception:
             pass
-        # fallback circle with initials
-        circ = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        d = ImageDraw.Draw(circ)
-        d.ellipse((0, 0, size - 1, size - 1), fill=(96, 96, 160, 255))
-        initials = (author.first_name[:1] if author.first_name else "?") + (author.last_name[:1] if author.last_name else "")
-        initials = initials.strip() or "?"
-        f = ImageFont.truetype(str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"), size=int(size * 0.45))
-        tw = d.textlength(initials, font=f)
-        tb = f.getbbox(initials)
-        th = tb[3] - tb[1]
-        d.text(((size - tw) / 2, (size - th) / 2 - 2), initials, font=f, fill=(255, 255, 255, 255))
-        return circ
+            
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Failed to create sticker: {str(e)}")
+        print(f"Stickerquote error: {e}")
+        import traceback
+        traceback.print_exc()
 
-    avatar = await _avatar(bot, author, AV)
-    img.paste(avatar, (PAD, y_top), avatar)
 
-    # Name + handle
-    draw.text((x_text, y_top), display_name, font=font_name, fill=NAME_C)
-    if handle and handle != display_name:
-        nm_w = draw.textlength(display_name + "  ", font=font_name)
-        draw.text((x_text + nm_w, y_top + 12), handle, font=font_meta, fill=META_C)
-
-    # Bubble
-    r = 42
-    bubble = Image.new("RGBA", (bubble_w, bubble_h), (0, 0, 0, 0))
-    bdraw = ImageDraw.Draw(bubble)
-    bdraw.rounded_rectangle((0, 0, bubble_w, bubble_h), radius=r, fill=BUBBLE)
-    img.paste(bubble, (x_text, by), bubble)
-
-    # Emoji-aware text draw (single call)
-    _draw_text_with_emoji_any(
-        draw, img,
-        x_text_start,
-        y_text_centered,
-        wrapped,
-        base_font=base_font,
-        emoji_font=emoji_font,
-        fill=TEXT_C,
-        line_spacing=18,
-)
-
-    
-
-    # Save & send WEBP sticker (≤512 px)
-    try:
-        print("WEBP support:", features.check("webp"))
-    except Exception:
-        pass
-
-    max_side = 512
-    w, h = img.size
-    scale = min(max_side / w, max_side / h, 1)
-    if scale < 1:
-        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-    if img.mode not in ("RGB", "RGBA"):
-        img = img.convert("RGBA")
-
-    bio = BytesIO()
-    bio.name = "quote.webp"
-    img.save(bio, format="WEBP", lossless=True, quality=100, method=6)
-    bio.seek(0)
-
-    await bot.send_sticker(chat_id=update.effective_chat.id, sticker=bio)
-# ===================== END STICKER QUOTE =====================
+# --- Integration Instructions ---
+# In your main() function, add this handler:
+# app.add_handler(CommandHandler(["stickerquote", "sq"], stickerquote))
 
 # Add this in main():
 # app.add_handler(CommandHandler("stickerquote", stickerquote))
