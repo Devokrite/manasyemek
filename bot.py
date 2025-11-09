@@ -111,37 +111,47 @@ SCHEDULE: dict[int, list[str]] = {
     6: ["Отдых"],  # Воскресенье
 }
 
-DAY_NAMES_RU = [
-    "Понедельник",
-    "Вторник",
-    "Среда",
-    "Четверг",
-    "Пятница",
-    "Суббота",
-    "Воскресенье",
-]
+# ====== Улучшенный формат расписания ======
+_item_re = re.compile(
+    r"^(?P<time>\d{2}:\d{2}–\d{2}:\d{2})\s+"
+    r"(?P<subject>.+?)\s+—\s+"
+    r"(?P<teacher>.+?)\s+\((?P<room>.+)\)$"
+)
+
+def _pretty_item(raw: str) -> str:
+    m = _item_re.match(raw)
+    if not m:
+        return f"• {raw}"
+    t = m.groupdict()
+    return (
+        f"• <b>{t['subject']}</b>  <code>{t['time']}</code>\n"
+        f"  <i>{t['teacher']}</i> · {t['room']}"
+    )
+
+DAY_NAMES_RU = ["Понедельник","Вторник","Среда","Четверг","Пятница","Суббота","Воскресенье"]
 
 def _fmt_day_lines(dt: datetime) -> str:
     wd = dt.weekday()
-    title = f"*📅 {DAY_NAMES_RU[wd]} ({dt.strftime('%d.%m')})*"
+    title = f"📅 <b>{DAY_NAMES_RU[wd]} ({dt.strftime('%d.%m')})</b>"
     items = SCHEDULE.get(wd, [])
     if not items:
-        return f"{title}\n• Занятий нет 🙂"
-    return title + "\n" + "\n".join(f"• {x}" for x in items)
+        return f"{title}\nЗанятий нет 🙂"
+    body = "\n\n".join(_pretty_item(x) for x in items)
+    return f"{title}\n\n{body}"
 
 def _week_bounds(dt: datetime) -> tuple[datetime, datetime]:
     monday = dt - timedelta(days=dt.weekday())
-    sunday = monday + timedelta(days=6)
-    return monday, sunday
+    return monday, monday + timedelta(days=6)
 
 def _fmt_week(dt: datetime) -> str:
-    monday, sunday = _week_bounds(dt)
-    cur = monday
+    monday, _ = _week_bounds(dt)
     parts = []
+    cur = monday
     for _ in range(7):
         parts.append(_fmt_day_lines(cur))
         cur += timedelta(days=1)
-    return "\n\n".join(parts)
+    return "\n\n──────────\n\n".join(parts)
+
 
 # ===== Crocodile Game CONFIG =====
 CROC_WORDS = [
@@ -876,9 +886,9 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Вся неделя", callback_data="sch:week")],
     ]
     await update.effective_message.reply_text(
-        "📚 Расписание: выберите период ↓",
+        "📚Расписание: выберите период↓",
         reply_markup=InlineKeyboardMarkup(kb),
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
     )
 
 async def schedule_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -890,11 +900,11 @@ async def schedule_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "sch:today":
         text = _fmt_day_lines(now)
-        await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+        await q.edit_message_text(text, parse_mode=ParseMode.HTML)
 
     elif data == "sch:tomorrow":
         text = _fmt_day_lines(now + timedelta(days=1))
-        await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+        await q.edit_message_text(text, parse_mode=ParseMode.HTML)
 
     elif data == "sch:week":
         text = _fmt_week(now)
@@ -903,7 +913,7 @@ async def schedule_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("📅 Вся неделя:")
         except Exception:
             pass
-        await context.bot.send_message(chat_id=q.message.chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+        await context.bot.send_message(chat_id=q.message.chat_id, text=text, parse_mode=ParseMode.HTML)
 
 
 
