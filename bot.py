@@ -2226,6 +2226,10 @@ def main():
     # =========================
     # Remaining handlers (keep as needed)
     # =========================
+    app.add_handler(CommandHandler("secret", secret_cmd))
+    app.add_handler(CallbackQueryHandler(secret_reveal_cb, pattern=r"^sc\|"))
+    # Add to existing /start handler or create new one:
+    app.add_handler(CommandHandler("start", start_with_token))
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("stickerquote", stickerquote))
     app.add_handler(
@@ -2234,10 +2238,7 @@ def main():
             sms_purge,
         )
     )
-    app.add_handler(CommandHandler("secret", secret_cmd))
-    app.add_handler(CallbackQueryHandler(secret_reveal_cb, pattern=r"^sc\|"))
-    # Add to existing /start handler or create new one:
-    app.add_handler(CommandHandler("start", start_with_token))
+
     logging.getLogger(__name__).info("🤖 Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
 
