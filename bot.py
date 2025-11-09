@@ -798,6 +798,45 @@ def media_group_for(dishes: list[dict]):
     return media
 
 # ======================= ADDED COMMANDS 
+# ===================== QOTD & COINFLIP =====================
+import random
+from datetime import datetime
+from telegram import Update
+from telegram.ext import ContextTypes
+
+# --- Quote of the Day ---
+_QOTD_LOCAL = [
+    ("The best way out is always through.", "Robert Frost"),
+    ("What we think, we become.", "Buddha"),
+    ("Make each day your masterpiece.", "John Wooden"),
+    ("Simplicity is the ultimate sophistication.", "Leonardo da Vinci"),
+    ("Action is the foundational key to all success.", "Pablo Picasso"),
+    ("Whether you think you can or think you can’t, you’re right.", "Henry Ford"),
+    ("The only way to do great work is to love what you do.", "Steve Jobs"),
+    ("Do or do not. There is no try.", "Yoda"),
+]
+
+def _pick_qotd() -> tuple[str, str]:
+    """Return a deterministic quote for today."""
+    seed = datetime.utcnow().strftime("%Y-%m-%d")
+    rng = random.Random(seed)
+    return rng.choice(_QOTD_LOCAL)
+
+async def qotd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send the quote of the day."""
+    quote, author = _pick_qotd()
+    await update.effective_message.reply_text(
+        f"💬 *Quote of the Day*\n\n“{quote}”\n— {author}",
+        parse_mode="Markdown"
+    )
+
+# --- Coin Flip ---
+async def coinflip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Flip a coin."""
+    side = random.choice(["🪙 Heads", "🪙 Tails"])
+    await update.effective_message.reply_text(side)
+# ===================== END QOTD & COINFLIP =====================
+
 # ===================== /SECRET COMMAND =====================
 # Secure ephemeral messaging for groups
 # Paste this entire block into your bot (15).py or bot (16).py
@@ -2230,6 +2269,8 @@ def main():
     app.add_handler(CallbackQueryHandler(secret_reveal_cb, pattern=r"^sc\|"))
     # Add to existing /start handler or create new one:
     app.add_handler(CommandHandler("start", start_with_token))
+    app.add_handler(CommandHandler("qotd", qotd))
+    app.add_handler(CommandHandler("coinflip", coinflip))
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("stickerquote", stickerquote))
     app.add_handler(
