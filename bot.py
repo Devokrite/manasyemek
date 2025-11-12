@@ -1026,24 +1026,76 @@ def _weekday_key(dt: datetime) -> str:
     return names[dt.weekday()]
 
 def _fmt_day_from(table: dict[str, list[str]], dt: datetime, title: str) -> str:
+    """
+    Renders NON-management tables in the same visual style as Management:
+      • <BOLD COURSE>  |  <code>HH:MM–HH:MM</code>
+        <i>Teacher · Room</i>
+    Accepts each lesson as a single string:
+      "HH:MM–HH:MM | Course | Teacher | Room"
+    """
     wk = _weekday_key(dt)
-    lines = table.get(wk, [])
-    if not lines:
+    rows = table.get(wk, [])
+    if not rows:
         return f"📚 <b>{title}</b>\n\nНет пар на этот день."
-    body = "\n".join(lines)
-    return f"📚 <b>{title}</b>\n\n{body}"
+
+    out = [f"📚 <b>{title}</b>\n"]
+    for raw in rows:
+        # Split exactly into 4 pieces
+        parts = [p.strip() for p in raw.split("|")]
+        # tolerate lines with extra pipes
+        if len(parts) >= 4:
+            time_s, course, teacher, room = parts[0], parts[1], parts[2], parts[3]
+        else:
+            # fallback: show raw line
+            out.append(raw)
+            out.append("")
+            continue
+
+        course_up = course.strip().upper()
+        time_code = f"<code>{time_s.strip()}</code>"
+        teacher_room = f"<i>{teacher.strip()} · {room.strip()}</i>"
+
+        # two-line block like Management
+        out.append(f"• <b>{course_up}</b>  {time_code}")
+        out.append(teacher_room)
+        out.append("")  # blank line between lessons
+
+    return "\n".join(out).rstrip()
 
 def _fmt_week_from(table: dict[str, list[str]], title: str) -> str:
+    """
+    Same visual style as Management, grouped by weekday.
+    Expects the same per-row string format as _fmt_day_from.
+    """
     order = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
     day_ru = {
         "monday": "Пн", "tuesday": "Вт", "wednesday": "Ср",
         "thursday": "Чт", "friday": "Пт", "saturday": "Сб", "sunday": "Вс"
     }
-    blocks = []
+    blocks: list[str] = [f"📅 <b>{title}</b> — вся неделя\n"]
+
     for k in order:
-        lines = table.get(k, []) or ["—"]
-        blocks.append(f"<b>{day_ru[k]}</b>\n" + "\n".join(lines))
-    return f"📅 <b>{title}</b> — вся неделя\n\n" + "\n\n".join(blocks)
+        rows = table.get(k, [])
+        blocks.append(f"<b>{day_ru[k]}</b>")
+        if not rows:
+            blocks.append("—")
+            blocks.append("")
+            continue
+
+        for raw in rows:
+            parts = [p.strip() for p in raw.split("|")]
+            if len(parts) >= 4:
+                time_s, course, teacher, room = parts[0], parts[1], parts[2], parts[3]
+                course_up = course.upper()
+                time_code = f"<code>{time_s}</code>"
+                blocks.append(f"• <b>{course_up}</b>  {time_code}")
+                blocks.append(f"<i>{teacher} · {room}</i>")
+                blocks.append("")
+            else:
+                blocks.append(raw)
+                blocks.append("")
+
+    return "\n".join(blocks).rstrip()
 
 def _schedule_text_for(dept_key: str, day_key: str, now: datetime) -> str:
     if dept_key == "management":
