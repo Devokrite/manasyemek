@@ -885,6 +885,7 @@ DEPARTMENTS = [
     ("management", "Management"),
     ("programming", "Programming"),
     ("electrical", "Electrical Engineering"),
+    ("biology", "Biology"),
 ]
 DAYS = [
     ("today", "Сегодня"),
@@ -1019,6 +1020,55 @@ SCHED_ELECTRICAL = {
     "saturday": [],
     "sunday": [],
 }
+# ---- BIOLOGY (Biyoloji) ----
+SCHED_BIOLOGY = {
+    "monday": [
+        "08:55–09:40 | BIO-103 Genel Zooloji | Bermet Kidiralieva | MFFB 221",
+        "09:50–10:35 | BIO-103 Genel Zooloji | Bermet Kidiralieva | MFFB 223",
+        "10:45–11:30 | MAT-110 Matematik I | Bakıtbay Ablabekov | MFFB 221",
+        "11:40–12:25 | MAT-110 Matematik I | Bakıtbay Ablabekov | MFFB 221",
+        "13:30–14:15 | BIO-103 Genel Zooloji | Bermet Kidiralieva | MFFB 223",
+        "14:25–15:10 | BIO-103 Genel Zooloji | Bermet Kidiralieva | MFFB 223",
+        "16:15–17:00 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
+        "17:10–17:55 | BIL-100 Enformatik | Çınara Cumabayeva | IIBF Online",
+    ],
+    "tuesday": [
+        "10:45–11:30 | KMM-113(U) Genel Kimya (Uygulama) | Nurzat Şaykieva | MFFB 321",
+        "11:40–12:25 | KMM-113(U) Genel Kimya (Uygulama) | Nurzat Şaykieva | MFFB 321",
+        "13:30–14:15 | BIO-101 Genel Botanik | Miskalay Ganiyabayeva | MFFB 202",
+        "14:25–15:10 | BIO-101 Genel Botanik | Miskalay Ganiyabayeva | MFFB 202",
+        "15:20–16:05 | BIO-101 Genel Botanik | Miskalay Ganiyabayeva | MFFB 222",
+        "16:15–17:00 | BIO-101 Genel Botanik | Miskalay Ganiyabayeva | MFFB 222",
+        "17:10–17:55 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
+    ],
+    "wednesday": [
+        "10:45–11:30 | MAT-110 Matematik I | Bakıtbay Ablabekov | MFFB 202",
+        "11:40–12:25 | MAT-110 Matematik I | Bakıtbay Ablabekov | MFFB 202",
+        "13:30–14:15 | BES-111 Beden Eğitimi ve Spor I | Azamat Tillabayev | KSSB Spor sahası (kapalı)",
+        "14:25–15:10 | BES-111 Beden Eğitimi ve Spor I | Azamat Tillabayev | KSSB Spor sahası (kapalı)",
+        "16:15–17:00 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
+        "17:10–17:55 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
+    ],
+    "thursday": [
+        "10:45–11:30 | BIL-100 Enformatik | Çınara Cumabayeva | IIBF 111",
+        "11:40–12:25 | BIL-100 Enformatik | Çınara Cumabayeva | IIBF 111",
+        "16:15–17:00 | ING-111 İngilizce I | Svetlana Çenebekova | MFFB Online",
+        "17:10–17:55 | ING-111 İngilizce I | Svetlana Çenebekova | MFFB Online",
+    ],
+    "friday": [
+        "08:55–09:40 | BIO-105 Hücre Biyolojisi | Caynagül Isakova | MFFB 202",
+        "09:50–10:35 | BIO-105 Hücre Biyolojisi | Caynagül Isakova | MFFB 202",
+        "10:45–11:30 | BIO-105 Hücre Biyolojisi | Caynagül Isakova | MFFB 222",
+        "11:40–12:25 | BIO-105 Hücre Biyolojisi | Caynagül Isakova | MFFB 222",
+        "13:30–14:15 | KGZ-103 Kırgız Dili ve Edebiyatı I | Aynura Beyşeyeva | ZIRF 205",
+        "14:25–15:10 | KGZ-103 Kırgız Dili ve Edebiyatı I | Aynura Beyşeyeva | ZIRF 205",
+        "16:15–17:00 | RSC-103 Rusça I | Svetlana Parmanasova | MFFB Online",
+        "17:10–17:55 | RSC-103 Rusça I | Svetlana Parmanasova | MFFB Online",
+    ],
+    "saturday": [],
+    "sunday": [],
+}
+
 
 # Helpers to reuse for any department table (similar spirit to your _fmt_day_lines/_fmt_week)
 def _weekday_key(dt: datetime) -> str:
@@ -1128,6 +1178,16 @@ def _schedule_text_for(dept_key: str, day_key: str, now: datetime) -> str:
         elif day_key == "week":
             return _fmt_week_from(SCHED_ELECTRICAL, title)
         return "Неизвестный период."
+    if dept_key == "biology":
+        title = DEPT_LABEL["biology"]
+        if day_key == "today":
+            return _fmt_day_from(SCHED_BIOLOGY, now, title)
+        elif day_key == "tomorrow":
+            return _fmt_day_from(SCHED_BIOLOGY, now + timedelta(days=1), title)
+        elif day_key == "week":
+            return _fmt_week_from(SCHED_BIOLOGY, title)
+        return "Неизвестный период."
+
 
     return "Неизвестная кафедра."
 
