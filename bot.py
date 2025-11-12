@@ -959,36 +959,7 @@ def _fmt_week_from(table: dict[str, list[str]], title: str) -> str:
         blocks.append(f"<b>{day_ru[k]}</b>\n" + "\n".join(lines))
     return f"📅 <b>{title}</b> — вся неделя\n\n" + "\n\n".join(blocks)
 
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text(
-        "📚 Расписание → выберите кафедру:",
-        reply_markup=kb_departments(),
-        parse_mode=ParseMode.HTML,
-    )
-
-
-async def schedule_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = (q.data or "")
-
-    now = datetime.now(BISHKEK_TZ)
-
-    # Step 1: after picking department, show day choices
-    if data.startswith("sch:dept:"):
-        dept_key = data.split(":", 2)[2]
-        pretty = DEPT_LABEL.get(dept_key, dept_key)
-        await q.edit_message_text(
-            text=f"Кафедра: <b>{pretty}</b>\nТеперь выберите период:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_days(dept_key),
-        )
-        return
-
-    # Step 2: after picking day, show schedule
+# Step 2: after picking day, show schedule
     def _schedule_text_for(dept_key: str, day_key: str, now: datetime) -> str:
     if dept_key == "management":
         # use your existing pretty output for Management
@@ -1022,6 +993,58 @@ async def schedule_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return "Неизвестный период."
 
     return "Неизвестная кафедра."
+
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(
+        "📚 Расписание → выберите кафедру:",
+        reply_markup=kb_departments(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def schedule_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    data = (q.data or "")
+    now = datetime.now(BISHKEK_TZ)
+
+    # Step 1: department -> show day choices
+    if data.startswith("sch:dept:"):
+        dept_key = data.split(":", 2)[2]
+        pretty = DEPT_LABEL.get(dept_key, dept_key)
+        await q.edit_message_text(
+            text=f"Кафедра: <b>{pretty}</b>\nТеперь выберите период:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb_days(dept_key),
+        )
+        return
+
+    # Step 2: day -> show schedule
+    if data.startswith("sch:day:"):
+        _, _, dept_key, day_key = data.split(":", 3)
+        text = _schedule_text_for(dept_key, day_key, now)
+
+        # For long week output you can send as a fresh message (optional)
+        if day_key == "week" and dept_key == "management":
+            try:
+                await q.edit_message_text(f"📅 {DEPT_LABEL.get(dept_key, dept_key)} — вся неделя:")
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=q.message.chat_id, text=text, parse_mode=ParseMode.HTML
+            )
+        else:
+            await q.edit_message_text(text, parse_mode=ParseMode.HTML)
+        return
+
+    # Back-compat if old buttons are clicked
+    if data in ("sch:today", "sch:tomorrow", "sch:week"):
+        await q.edit_message_text("Обновлено: сначала выберите кафедру через /schedule")
+        return
+
 
 
 
