@@ -5,6 +5,9 @@ import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
+import aiohttp
+from bs4 import BeautifulSoup
+
 import hashlib
 import hmac
 import secrets
@@ -93,10 +96,10 @@ SCHEDULE: dict[int, list[str]] = {
         "14:25–15:10 ФИЗИЧЕСКАЯ КУЛЬТУРА I — Салтанат Кайкы (КССБ спортзал №01)",
     ],
     2: [  # Среда
-        "08:55–09:40 МАТЕМАТИКА I — Мирбек Токтосунов (ИИБФ 324)",
-        "09:50–10:35 МАТЕМАТИКА I — Мирбек Токтосунов (ИИБФ 324)",
-        "11:40–12:25 ВВЕДЕНИЕ В МЕНЕДЖМЕНТ  — Азамат Максудунов (ИИБФ 323)",
+        "10:45–11:30 МАТЕМАТИКА I — Мирбек Токтосунов (ИИБФ 324)",
+        "11:40–12:25 МАТЕМАТИКА I — Мирбек Токтосунов (ИИБФ 324)",
         "13:30–14:15 ВВЕДЕНИЕ В МЕНЕДЖМЕНТ  — Азамат Максудунов (ИИБФ 323)",
+        "14:25–15:10 ВВЕДЕНИЕ В МЕНЕДЖМЕНТ  — Азамат Максудунов (ИИБФ 323)",
     ],
     3: [],  # Четверг — нет занятий
     4: [  # Пятница
@@ -877,44 +880,236 @@ def media_group_for(dishes: list[dict]):
     return media
 
 # ===================== /schedule =====================
+# ---- Departments, Days, and Department URLs (UPDATED) ----
+DEPARTMENTS = [
+    ("management", "Management"),
+    ("programming", "Programming"),
+    ("electrical", "Electrical Engineering"),
+]
+
+DAYS = [
+    ("today", "Сегодня"),
+    ("tomorrow", "Завтра"),
+    ("week", "Вся неделя"),
+]
+
+# YOUR LINKS go here (fill the missing one when you have it):
+DEPT_URLS = {
+    "management": None,  # still uses your local SCHEDULE formatter
+    "programming": "http://timetable.manas.edu.kg/department-printer/1",
+    "electrical":  "http://timetable.manas.edu.kg/department-printer/191",
+    # If these two are swapped, just swap the URLs above.
+}
+
+DEPT_LABEL = {k: v for k, v in DEPARTMENTS}
+
+def kb_departments() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(text=label, callback_data=f"sch:dept:{key}")]
+         for key, label in DEPARTMENTS]
+    )
+
+def kb_days(dept_key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(text=label, callback_data=f"sch:day:{dept_key}:{day_key}")]
+         for day_key, label in DAYS]
+    )
+
+# --- DAY HEADINGS we’ll try to detect in the printer page (covers TR, EN, RU, KY) ---
+DAY_HEADINGS = {
+    "monday":     {"Pazartesi", "Monday", "Понедельник", "Дүйшөмбү"},
+    "tuesday":    {"Salı", "Tuesday", "Вторник", "Шейшемби"},
+    "wednesday":  {"Çarşamba", "Wednesday", "Среда", "Шаршемби"},
+    "thursday":   {"Perşembe", "Thursday", "Четверг", "Бейшемби"},
+    "friday":     {"Cuma", "Friday", "Пятница", "Жума"},
+    "saturday":   {"Cumartesi", "Saturday", "Суббота", "Ишемби"},
+    "sunday":     {"Pazar", "Sunday", "Воскресенье", "Жекшемби"},
+}
+
+# map your "today/tomorrow/week" to weekday lookup
+def _weekday_key(dt: datetime) -> str:
+    # 0..6 -> monday..sunday
+    names = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
+    return names[dt.weekday()]
+
+async def _fetch_html(url: str) -> str | None:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=15) as resp:
+                if resp.status == 200:
+                    return await resp.text()
+    except Exception:
+        return None
+    return None
+
+def _extract_day_block(html: str, target_weekday_key: str) -> str | None:
+    """
+    Very forgiving parser for the printer page:
+    - Finds all <h2>/<h3> that match any day name (TR/EN/RU/KY),
+      takes the block from the target day header up to the next day header.
+    - Converts that block to a readable text table.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Index headings for days
+    day_nodes = []
+    for tag in soup.find_all(["h2", "h3", "h4"]):
+        t = (tag.get_text(strip=True) or "").lower()
+        for wk, variants in DAY_HEADINGS.items():
+            if any(v.lower() in t for v in variants):
+                day_nodes.append((wk, tag))
+                break
+
+    if not day_nodes:
+        return None
+
+    # Find the node matching our target day
+    targets = [node for wk, node in day_nodes if wk == target_weekday_key]
+    if not targets:
+        return None
+
+    start = targets[0]
+    # find the next day header after start
+    following = None
+    for wk, node in day_nodes:
+        if node is start:
+            continue
+        if node.sourceline and start.sourceline and node.sourceline > start.sourceline:
+            if following is None or node.sourceline < following.sourceline:
+                following = node
+
+    # Collect siblings from start to (before) following
+    collected = []
+    cur = start.next_sibling
+    while cur and cur is not following:
+        collected.append(cur)
+        cur = cur.next_sibling
+
+    # If nothing, try the parent section
+    if not collected:
+        parent = start.parent
+        if parent:
+            collected = [parent]
+
+    # Turn collected HTML into a clean text
+    block_html = "".join(str(x) for x in collected)
+    block_soup = BeautifulSoup(block_html, "html.parser")
+
+    # Try to render tables if present; otherwise return text
+    tables = block_soup.find_all("table")
+    if tables:
+        lines = []
+        for tbl in tables:
+            for tr in tbl.find_all("tr"):
+                cells = [c.get_text(" ", strip=True) for c in tr.find_all(["td","th"])]
+                if cells:
+                    lines.append(" | ".join(cells))
+        return "\n".join(lines) if lines else block_soup.get_text("\n", strip=True)
+
+    return block_soup.get_text("\n", strip=True)
+
+def _extract_week_block(html: str) -> str | None:
+    """
+    Fallback: just pull all tables/text under the main container for the whole week.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    main = soup  # if there’s a specific container, you can narrow this
+    tables = main.find_all("table")
+    if tables:
+        lines = []
+        for tbl in tables:
+            for tr in tbl.find_all("tr"):
+                cells = [c.get_text(" ", strip=True) for c in tr.find_all(["td","th"])]
+                if cells:
+                    lines.append(" | ".join(cells))
+        return "\n".join(lines)
+    return soup.get_text("\n", strip=True)
+
+async def _schedule_text_for(dept_key: str, day_key: str, now: datetime) -> str:
+    # Keep your local formatter for Management
+    if dept_key == "management" or not DEPT_URLS.get(dept_key):
+        if day_key == "today":
+            return _fmt_day_lines(now)
+        elif day_key == "tomorrow":
+            return _fmt_day_lines(now + timedelta(days=1))
+        elif day_key == "week":
+            return _fmt_week(now)
+        return "Неизвестный период."
+
+    # Live fetch for other departments
+    url = DEPT_URLS[dept_key]
+    html = await _fetch_html(url)
+    if not html:
+        return f"⚠️ Не удалось загрузить расписание для <b>{DEPT_LABEL.get(dept_key, dept_key)}</b>.\nИсточник: {url}"
+
+    if day_key == "week":
+        block = _extract_week_block(html)
+        if not block or not block.strip():
+            return f"⚠️ Не удалось разобрать недельное расписание для <b>{DEPT_LABEL.get(dept_key, dept_key)}</b>.\nИсточник: {url}"
+        return f"📅 <b>{DEPT_LABEL.get(dept_key, dept_key)}</b> — вся неделя\n\n{block}"
+
+    # Today / Tomorrow
+    target_dt = now if day_key == "today" else (now + timedelta(days=1))
+    wk = _weekday_key(target_dt)
+    block = _extract_day_block(html, wk)
+    if not block or not block.strip():
+        return f"⚠️ Не удалось разобрать расписание на {('сегодня' if day_key=='today' else 'завтра')} для <b>{DEPT_LABEL.get(dept_key, dept_key)}</b>.\nИсточник: {url}"
+
+    pretty_day = "Сегодня" if day_key == "today" else "Завтра"
+    return f"📚 <b>{DEPT_LABEL.get(dept_key, dept_key)}</b> — {pretty_day}\n\n{block}"
+
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [
-        [InlineKeyboardButton("Сегодня", callback_data="sch:today")],
-        [InlineKeyboardButton("Завтра", callback_data="sch:tomorrow")],
-        [InlineKeyboardButton("Вся неделя", callback_data="sch:week")],
-    ]
     await update.effective_message.reply_text(
-        "📚Расписание: выберите период↓",
-        reply_markup=InlineKeyboardMarkup(kb),
+        "📚 Расписание → выберите кафедру:",
+        reply_markup=kb_departments(),
         parse_mode=ParseMode.HTML,
     )
+
 
 async def schedule_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    data = (q.data or "")
 
     now = datetime.now(BISHKEK_TZ)
-    data = q.data or ""
 
-    if data == "sch:today":
-        text = _fmt_day_lines(now)
-        await q.edit_message_text(text, parse_mode=ParseMode.HTML)
+    # Step 1: after picking department, show day choices
+    if data.startswith("sch:dept:"):
+        dept_key = data.split(":", 2)[2]
+        pretty = DEPT_LABEL.get(dept_key, dept_key)
+        await q.edit_message_text(
+            text=f"Кафедра: <b>{pretty}</b>\nТеперь выберите период:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb_days(dept_key),
+        )
+        return
 
-    elif data == "sch:tomorrow":
-        text = _fmt_day_lines(now + timedelta(days=1))
-        await q.edit_message_text(text, parse_mode=ParseMode.HTML)
+    # Step 2: after picking day, show schedule
+    if data.startswith("sch:day:"):
+        _, _, dept_key, day_key = data.split(":", 3)
+        text = await _schedule_text_for(dept_key, day_key, now)
 
-    elif data == "sch:week":
-        text = _fmt_week(now)
-        # long text → safer to send as a fresh message
-        try:
-            await q.edit_message_text("📅 Вся неделя:")
-        except Exception:
-            pass
-        await context.bot.send_message(chat_id=q.message.chat_id, text=text, parse_mode=ParseMode.HTML)
 
+        if day_key == "week" and dept_key == "management":
+            # Week text can be long: send as fresh message for safety
+            try:
+                await q.edit_message_text(f"📅 {DEPT_LABEL.get(dept_key, dept_key)} — вся неделя:")
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=q.message.chat_id, text=text, parse_mode=ParseMode.HTML
+            )
+        else:
+            await q.edit_message_text(text, parse_mode=ParseMode.HTML)
+        return
+
+    # (Backward compatibility in case someone clicks old buttons)
+    if data in ("sch:today", "sch:tomorrow", "sch:week"):
+        await q.edit_message_text("Обновлено: сначала выберите кафедру через /schedule")
+        return
 
 
 
