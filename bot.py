@@ -959,8 +959,7 @@ def _fmt_week_from(table: dict[str, list[str]], title: str) -> str:
         blocks.append(f"<b>{day_ru[k]}</b>\n" + "\n".join(lines))
     return f"📅 <b>{title}</b> — вся неделя\n\n" + "\n\n".join(blocks)
 
-# Step 2: after picking day, show schedule
-   def _schedule_text_for(dept_key: str, day_key: str, now: datetime) -> str:
+def _schedule_text_for(dept_key: str, day_key: str, now: datetime) -> str:
     if dept_key == "management":
         # use your existing pretty output for Management
         if day_key == "today":
@@ -993,7 +992,6 @@ def _fmt_week_from(table: dict[str, list[str]], title: str) -> str:
         return "Неизвестный период."
 
     return "Неизвестная кафедра."
-
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
