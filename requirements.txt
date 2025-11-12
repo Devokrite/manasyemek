@@ -7,3 +7,4 @@ httpx
 deep-translator
 apscheduler
 pytz
+aiohttp
