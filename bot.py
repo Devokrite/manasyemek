@@ -880,27 +880,17 @@ def media_group_for(dishes: list[dict]):
     return media
 
 # ===================== /schedule =====================
-# ---- Departments, Days, and Department URLs (UPDATED) ----
+# ---- Departments & Days (STATIC MODE) ----
 DEPARTMENTS = [
     ("management", "Management"),
     ("programming", "Programming"),
     ("electrical", "Electrical Engineering"),
 ]
-
 DAYS = [
     ("today", "Сегодня"),
     ("tomorrow", "Завтра"),
     ("week", "Вся неделя"),
 ]
-
-# YOUR LINKS go here (fill the missing one when you have it):
-DEPT_URLS = {
-    "management": None,  # still uses your local SCHEDULE formatter
-    "programming": "http://timetable.manas.edu.kg/department-printer/1",
-    "electrical":  "http://timetable.manas.edu.kg/department-printer/191",
-    # If these two are swapped, just swap the URLs above.
-}
-
 DEPT_LABEL = {k: v for k, v in DEPARTMENTS}
 
 def kb_departments() -> InlineKeyboardMarkup:
@@ -915,148 +905,59 @@ def kb_days(dept_key: str) -> InlineKeyboardMarkup:
          for day_key, label in DAYS]
     )
 
-# --- DAY HEADINGS we’ll try to detect in the printer page (covers TR, EN, RU, KY) ---
-DAY_HEADINGS = {
-    "monday":     {"Pazartesi", "Monday", "Понедельник", "Дүйшөмбү"},
-    "tuesday":    {"Salı", "Tuesday", "Вторник", "Шейшемби"},
-    "wednesday":  {"Çarşamba", "Wednesday", "Среда", "Шаршемби"},
-    "thursday":   {"Perşembe", "Thursday", "Четверг", "Бейшемби"},
-    "friday":     {"Cuma", "Friday", "Пятница", "Жума"},
-    "saturday":   {"Cumartesi", "Saturday", "Суббота", "Ишемби"},
-    "sunday":     {"Pazar", "Sunday", "Воскресенье", "Жекшемби"},
+# --- DROP YOUR LESSONS HERE ---
+# Format idea: each day is a list of lines; "week" will just join them by day.
+SCHED_PROGRAMMING = {
+    "monday": [
+        "09:00–09:45 | Algorithms | 2-02 | Dr. A",
+        "10:00–10:45 | Data Structures | 2-02 | Dr. A",
+    ],
+    "tuesday": [
+        "09:00–09:45 | OOP | 2-05 | Ms. B",
+    ],
+    "wednesday": [],
+    "thursday": [],
+    "friday": [],
+    "saturday": [],
+    "sunday": [],
 }
 
-# map your "today/tomorrow/week" to weekday lookup
+SCHED_ELECTRICAL = {
+    "monday": [
+        "09:00–09:45 | Circuit Theory | 3-12 | Prof. K",
+    ],
+    "tuesday": [],
+    "wednesday": [],
+    "thursday": [],
+    "friday": [],
+    "saturday": [],
+    "sunday": [],
+}
+
+# Helpers to reuse for any department table (similar spirit to your _fmt_day_lines/_fmt_week)
 def _weekday_key(dt: datetime) -> str:
-    # 0..6 -> monday..sunday
     names = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
     return names[dt.weekday()]
 
-async def _fetch_html(url: str) -> str | None:
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=15) as resp:
-                if resp.status == 200:
-                    return await resp.text()
-    except Exception:
-        return None
-    return None
+def _fmt_day_from(table: dict[str, list[str]], dt: datetime, title: str) -> str:
+    wk = _weekday_key(dt)
+    lines = table.get(wk, [])
+    if not lines:
+        return f"📚 <b>{title}</b>\n\nНет пар на этот день."
+    body = "\n".join(lines)
+    return f"📚 <b>{title}</b>\n\n{body}"
 
-def _extract_day_block(html: str, target_weekday_key: str) -> str | None:
-    """
-    Very forgiving parser for the printer page:
-    - Finds all <h2>/<h3> that match any day name (TR/EN/RU/KY),
-      takes the block from the target day header up to the next day header.
-    - Converts that block to a readable text table.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Index headings for days
-    day_nodes = []
-    for tag in soup.find_all(["h2", "h3", "h4"]):
-        t = (tag.get_text(strip=True) or "").lower()
-        for wk, variants in DAY_HEADINGS.items():
-            if any(v.lower() in t for v in variants):
-                day_nodes.append((wk, tag))
-                break
-
-    if not day_nodes:
-        return None
-
-    # Find the node matching our target day
-    targets = [node for wk, node in day_nodes if wk == target_weekday_key]
-    if not targets:
-        return None
-
-    start = targets[0]
-    # find the next day header after start
-    following = None
-    for wk, node in day_nodes:
-        if node is start:
-            continue
-        if node.sourceline and start.sourceline and node.sourceline > start.sourceline:
-            if following is None or node.sourceline < following.sourceline:
-                following = node
-
-    # Collect siblings from start to (before) following
-    collected = []
-    cur = start.next_sibling
-    while cur and cur is not following:
-        collected.append(cur)
-        cur = cur.next_sibling
-
-    # If nothing, try the parent section
-    if not collected:
-        parent = start.parent
-        if parent:
-            collected = [parent]
-
-    # Turn collected HTML into a clean text
-    block_html = "".join(str(x) for x in collected)
-    block_soup = BeautifulSoup(block_html, "html.parser")
-
-    # Try to render tables if present; otherwise return text
-    tables = block_soup.find_all("table")
-    if tables:
-        lines = []
-        for tbl in tables:
-            for tr in tbl.find_all("tr"):
-                cells = [c.get_text(" ", strip=True) for c in tr.find_all(["td","th"])]
-                if cells:
-                    lines.append(" | ".join(cells))
-        return "\n".join(lines) if lines else block_soup.get_text("\n", strip=True)
-
-    return block_soup.get_text("\n", strip=True)
-
-def _extract_week_block(html: str) -> str | None:
-    """
-    Fallback: just pull all tables/text under the main container for the whole week.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    main = soup  # if there’s a specific container, you can narrow this
-    tables = main.find_all("table")
-    if tables:
-        lines = []
-        for tbl in tables:
-            for tr in tbl.find_all("tr"):
-                cells = [c.get_text(" ", strip=True) for c in tr.find_all(["td","th"])]
-                if cells:
-                    lines.append(" | ".join(cells))
-        return "\n".join(lines)
-    return soup.get_text("\n", strip=True)
-
-async def _schedule_text_for(dept_key: str, day_key: str, now: datetime) -> str:
-    # Keep your local formatter for Management
-    if dept_key == "management" or not DEPT_URLS.get(dept_key):
-        if day_key == "today":
-            return _fmt_day_lines(now)
-        elif day_key == "tomorrow":
-            return _fmt_day_lines(now + timedelta(days=1))
-        elif day_key == "week":
-            return _fmt_week(now)
-        return "Неизвестный период."
-
-    # Live fetch for other departments
-    url = DEPT_URLS[dept_key]
-    html = await _fetch_html(url)
-    if not html:
-        return f"⚠️ Не удалось загрузить расписание для <b>{DEPT_LABEL.get(dept_key, dept_key)}</b>.\nИсточник: {url}"
-
-    if day_key == "week":
-        block = _extract_week_block(html)
-        if not block or not block.strip():
-            return f"⚠️ Не удалось разобрать недельное расписание для <b>{DEPT_LABEL.get(dept_key, dept_key)}</b>.\nИсточник: {url}"
-        return f"📅 <b>{DEPT_LABEL.get(dept_key, dept_key)}</b> — вся неделя\n\n{block}"
-
-    # Today / Tomorrow
-    target_dt = now if day_key == "today" else (now + timedelta(days=1))
-    wk = _weekday_key(target_dt)
-    block = _extract_day_block(html, wk)
-    if not block or not block.strip():
-        return f"⚠️ Не удалось разобрать расписание на {('сегодня' if day_key=='today' else 'завтра')} для <b>{DEPT_LABEL.get(dept_key, dept_key)}</b>.\nИсточник: {url}"
-
-    pretty_day = "Сегодня" if day_key == "today" else "Завтра"
-    return f"📚 <b>{DEPT_LABEL.get(dept_key, dept_key)}</b> — {pretty_day}\n\n{block}"
+def _fmt_week_from(table: dict[str, list[str]], title: str) -> str:
+    order = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
+    day_ru = {
+        "monday": "Пн", "tuesday": "Вт", "wednesday": "Ср",
+        "thursday": "Чт", "friday": "Пт", "saturday": "Сб", "sunday": "Вс"
+    }
+    blocks = []
+    for k in order:
+        lines = table.get(k, []) or ["—"]
+        blocks.append(f"<b>{day_ru[k]}</b>\n" + "\n".join(lines))
+    return f"📅 <b>{title}</b> — вся неделя\n\n" + "\n\n".join(blocks)
 
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -1088,28 +989,39 @@ async def schedule_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Step 2: after picking day, show schedule
-    if data.startswith("sch:day:"):
-        _, _, dept_key, day_key = data.split(":", 3)
-        text = await _schedule_text_for(dept_key, day_key, now)
+    def _schedule_text_for(dept_key: str, day_key: str, now: datetime) -> str:
+    if dept_key == "management":
+        # use your existing pretty output for Management
+        if day_key == "today":
+            return _fmt_day_lines(now)
+        elif day_key == "tomorrow":
+            return _fmt_day_lines(now + timedelta(days=1))
+        elif day_key == "week":
+            return _fmt_week(now)
+        return "Неизвестный период."
 
+    # Static tables for other departments
+    if dept_key == "programming":
+        title = f"{DEPT_LABEL['programming']}"
+        if day_key == "today":
+            return _fmt_day_from(SCHED_PROGRAMMING, now, title)
+        elif day_key == "tomorrow":
+            return _fmt_day_from(SCHED_PROGRAMMING, now + timedelta(days=1), title)
+        elif day_key == "week":
+            return _fmt_week_from(SCHED_PROGRAMMING, title)
+        return "Неизвестный период."
 
-        if day_key == "week" and dept_key == "management":
-            # Week text can be long: send as fresh message for safety
-            try:
-                await q.edit_message_text(f"📅 {DEPT_LABEL.get(dept_key, dept_key)} — вся неделя:")
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=q.message.chat_id, text=text, parse_mode=ParseMode.HTML
-            )
-        else:
-            await q.edit_message_text(text, parse_mode=ParseMode.HTML)
-        return
+    if dept_key == "electrical":
+        title = f"{DEPT_LABEL['electrical']}"
+        if day_key == "today":
+            return _fmt_day_from(SCHED_ELECTRICAL, now, title)
+        elif day_key == "tomorrow":
+            return _fmt_day_from(SCHED_ELECTRICAL, now + timedelta(days=1), title)
+        elif day_key == "week":
+            return _fmt_week_from(SCHED_ELECTRICAL, title)
+        return "Неизвестный период."
 
-    # (Backward compatibility in case someone clicks old buttons)
-    if data in ("sch:today", "sch:tomorrow", "sch:week"):
-        await q.edit_message_text("Обновлено: сначала выберите кафедру через /schedule")
-        return
+    return "Неизвестная кафедра."
 
 
 
