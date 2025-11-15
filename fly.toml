@@ -1,0 +1,8 @@
+app = "your-app-name-will-auto-generate"
+
+[build]
+  builder = "paketobuildpacks/builder:base"
+
+[[services]]
+  internal_port = 8080
+  processes = ["app"]
