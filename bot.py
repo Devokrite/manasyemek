@@ -775,34 +775,58 @@ async def croc_group_listener(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}\s+\S+", re.U)
 
-def tr(text: str) -> str:
-    try:
-        return GoogleTranslator(source="auto", target="ru").translate(text)
-    except Exception:
-        return text
+# =======================
+# OPTIMIZED HELPERS
+# =======================
 
-def fetch_menu_html() -> str:
+async def fetch_menu_html_async() -> str:
+    # Check cache first
     if time.time() - _cache["ts"] < CACHE_TTL and _cache["raw"]:
         return _cache["raw"]
+    
+    # Use aiohttp for non-blocking download
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; MenuBot/3.1)",
         "Accept-Language": "tr-TR,tr;q=0.9,ru;q=0.8,en;q=0.7",
         "Cache-Control": "no-cache",
     }
-    r = requests.get(MENU_URL, headers=headers, timeout=15)
-    r.raise_for_status()
-    _cache["raw"] = r.text
-    _cache["parsed"] = None
-    _cache["ts"] = time.time()
-    return r.text
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(MENU_URL, headers=headers, timeout=15) as resp:
+                resp.raise_for_status()
+                text = await resp.text()
+                # Update Cache
+                _cache["raw"] = text
+                _cache["parsed"] = None
+                _cache["ts"] = time.time()
+                return text
+        except Exception as e:
+            log.error(f"Network error: {e}")
+            raise
 
-def parse_menu(html: str):
+async def tr_async(text: str) -> str:
+    """Runs the blocking translator in a separate thread."""
+    if not text: 
+        return ""
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, 
+            lambda: GoogleTranslator(source="auto", target="ru").translate(text)
+        )
+    except Exception:
+        return text
+
+async def parse_menu_async(html: str):
     if _cache["parsed"] is not None and _cache["raw"] == html:
         return _cache["parsed"]
 
     soup = BeautifulSoup(html, "html.parser")
     result = OrderedDict()
 
+    # 1. First pass: Collect all items
+    all_items_flat = [] 
+    
     heads = soup.select("div.mbr-section-head")
     for head in heads:
         h5 = head.find("h5")
@@ -816,7 +840,7 @@ def parse_menu(html: str):
         if not row:
             continue
 
-        items = []
+        day_items = []
         for card in row.select("div.item.features-image"):
             img_tag = card.select_one(".item-img img")
             img_url = None
@@ -839,19 +863,29 @@ def parse_menu(html: str):
                     kcal = m.group(1)
 
             if name:
-                items.append({
+                item_obj = {
                     "name": name,
-                    "name_ru": tr(name),
+                    "name_ru": name, 
                     "kcal": kcal,
                     "img": img_url,
-                })
+                }
+                day_items.append(item_obj)
+                all_items_flat.append(item_obj)
 
-        if items:
-            result[date_text] = items
+        if day_items:
+            result[date_text] = day_items
+
+    # 2. Second pass: Translate EVERYTHING in parallel
+    tasks = [tr_async(item["name"]) for item in all_items_flat]
+    
+    if tasks:
+        translations = await asyncio.gather(*tasks)
+        for item, ru_text in zip(all_items_flat, translations):
+            item["name_ru"] = ru_text
 
     _cache["parsed"] = result
     return result
-
+    
 def format_day(date_key: str, dishes: list[dict]) -> str:
     lines = [f"*{date_key}*"]
     for d in dishes:
@@ -2069,8 +2103,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     try:
-        html = fetch_menu_html()
-        menu = parse_menu(html)
+        html = await fetch_menu_html_async()   # NEW
+        menu = await parse_menu_async(html)    # NEW
     except Exception:
         log.exception("Fetch/parse failed")
         await q.edit_message_text(TXT["could_not_load"])
