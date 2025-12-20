@@ -73,7 +73,7 @@ def _pick_font(size: int):
 # =======================
 # CONFIG
 # =======================
-BOT_TOKEN = "7681582309:AAF8Zv0nNkV50LviL0gU1pusj8egDbE9_mw"   # <-- your token
+BOT_TOKEN = "8377677843:AAGQf3whqfwzwaB4MCSwbEtRxrA7ervqxGw"   # <-- your token
 BASE_URL = "https://beslenme.manas.edu.kg"
 MENU_URL = f"{BASE_URL}/menu"
 BISHKEK_TZ = pytz_timezone("Asia/Bishkek")
