@@ -356,7 +356,7 @@ TXT = {
 # =======================
 # CACHING
 # =======================
-CACHE_TTL = 600  # 10 minutes
+CACHE_TTL = 1800  # 10 minutes
 _cache = {"ts": 0.0, "parsed": None, "raw": None}
 
 # =======================
