@@ -1451,6 +1451,20 @@ def get_secret(secret_id: str) -> Optional[dict]:
 
 # --- Command Handlers ---
 
+async def refresh_menu_job(context: ContextTypes.DEFAULT_TYPE):
+    """Background task to force-refresh the menu cache."""
+    try:
+        # 1. Force expire the cache so it actually downloads new data
+        _cache["ts"] = 0 
+        
+        # 2. Fetch and Parse (this includes the slow translation step)
+        html = await fetch_menu_html_async()
+        await parse_menu_async(html)
+        
+        logging.getLogger(__name__).info("✅ Menu refreshed in background!")
+    except Exception as e:
+        logging.getLogger(__name__).error(f"⚠️ Background menu refresh failed: {e}")
+
 async def secret_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /secret @username your secret message
@@ -1608,7 +1622,16 @@ async def start_with_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not msg or not user:
         return
-    
+        
+    if not context.args or not context.args[0]:
+        # This is the exact code from your yemek function:
+        kb = [
+            [InlineKeyboardButton(TXT["today"], callback_data="today")],
+            [InlineKeyboardButton(TXT["tomorrow"], callback_data="tomorrow")],
+            [InlineKeyboardButton(TXT["dayafter"], callback_data="dayafter")],
+        ]
+        await msg.reply_text(TXT["welcome"], reply_markup=InlineKeyboardMarkup(kb))
+        return
     # Only process in private chats
     if update.effective_chat.type != "private":
         return
@@ -2750,6 +2773,9 @@ def main():
     # =========================
     # Command handlers (your existing ones)
     # =========================
+    app.job_queue.run_repeating(refresh_menu_job, interval=1200, first=5)
+
+    
     app.add_handler(
         CommandHandler(
             ["quote", "q"],
