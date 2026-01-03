@@ -3012,7 +3012,8 @@ async def imposter_force_end(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # If the bot doesn't think there's a game, try sending this anyway
         # just to confirm the command is working.
         await update.effective_message.reply_text("⚠️ No active game found to stop.")
-    async def imposter_nuke(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    
+async def imposter_nuke(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Nuclear option: Clears game data blindly."""
     chat_id = update.effective_chat.id
     
