@@ -2999,20 +2999,19 @@ async def _refresh_ui(query, game):
         await query.edit_message_text(text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     except Exception:
         pass  # Message not modified
+    
 async def imposter_force_end(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Forcefully ends the current Imposter game."""
+    """Forcefully clears the game session for this chat."""
     chat = update.effective_chat
     
-    # Check if a game exists
+    # Try to delete the game key for this chat
     if chat.id in IMPOSTER_GAMES:
         del IMPOSTER_GAMES[chat.id]
-        await update.effective_message.reply_text(
-            "🛑 **Game forcefully stopped.**\n"
-            "Now you can start a new game /imposter",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await update.effective_message.reply_text("✅ Game session cleared. You can start a new one now.")
     else:
-        await update.effective_message.reply_text("Нет активной игры, которую можно остановить.")
+        # If the bot doesn't think there's a game, try sending this anyway
+        # just to confirm the command is working.
+        await update.effective_message.reply_text("⚠️ No active game found to stop.")
 
 
 
