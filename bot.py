@@ -334,7 +334,33 @@ PREDICTIONS_RU: list[str] = [
 # Чтобы не повторять одну и ту же строчку подряд для одного пользователя
 from collections import defaultdict, deque
 _LAST_PICKS: dict[int, deque[int]] = defaultdict(lambda: deque(maxlen=2))
+# =======================
+# IMPOSTER GAME CONFIG
+# =======================
+IMPOSTER_GAMES: dict[int, dict] = {} 
+# Structure: {chat_id: {
+#    "host_id": int,
+#    "host_name": str,
+#    "players": {user_id: user_name},
+#    "status": "waiting" | "playing",
+#    "word": str,
+#    "imposter_id": int
+# }}
 
+IMPOSTER_WORDS = [
+    "Ким Кардашьян", "Криштиану Роналду", "Лионель Месси", "Илон Маск",
+    "Эпштейн", "Владимир Путин", "Дональд Трамп", "Чарли Кирк",
+    "Конор Макгрегор", "Хасбик", "Марк Цукерберг", "Джейсон Стетхэм",
+    "Райан Гослинг", "Тейлор Свифт", "Дуэйн Скала Джонсон", "Айдар", "Саид", "Саадат", 
+    "Кайрат", "Бакай", "Айдана", 
+    # Интересные места и Миры
+    "Байтур", "Антикино", "Медербек (укук)", "Али-Бургер", "Матиза", "Диснейленд",
+    "Фит", "Матаз", "Бродяга", "Мужчина",
+    "Оладьи", "Салат", "Саламат", "Мирбек Токтосунов (Математика)",
+    "Клеш Рояль", "УКУК", "Насвайщик", "Кант",
+    "Шредер", "Я3", "Атшш",
+    "Краат", "Бешбармак", "Тимати", "Егор Крид", "Леброн Джеймс", "Нурсулуу", "Нузара", 
+]
 
 # =======================
 # UI (RU)
@@ -2746,7 +2772,233 @@ async def croc_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         return
+# =======================
+# IMPOSTER GAME LOGIC
+# =======================
 
+async def imposter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Starts a new Imposter lobby."""
+    chat = update.effective_chat
+    user = update.effective_user
+    
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await update.effective_message.reply_text("This game is for groups only!")
+        return
+
+    # Check if game already exists
+    if chat.id in IMPOSTER_GAMES:
+        await update.effective_message.reply_text("A game is already in progress! Finish it first.")
+        return
+
+    # Create new game session
+    IMPOSTER_GAMES[chat.id] = {
+        "host_id": user.id,
+        "host_name": user.full_name,
+        "players": {user.id: user.full_name},  # Host joins automatically
+        "status": "waiting",
+        "word": None,
+        "imposter_id": None
+    }
+
+    await _update_imposter_message(context, chat.id)
+
+
+async def _update_imposter_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """Helper to update the lobby message interface."""
+    game = IMPOSTER_GAMES.get(chat_id)
+    if not game:
+        return
+
+    players_list = "\n".join([f"👤 {name}" for name in game["players"].values()])
+    
+    if game["status"] == "waiting":
+        text = (
+            f"🕵️‍♂️ **Imposter Game**\n\n"
+            f"Host: {game['host_name']}\n"
+            f"Status: Waiting for players...\n\n"
+            f"**Players ({len(game['players'])}):**\n"
+            f"{players_list}\n\n"
+            f"Join the game and wait for the host to start!"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Join / Leave", callback_data=f"imp:join:{chat_id}")],
+            [InlineKeyboardButton("🚀 Start Game", callback_data=f"imp:start:{chat_id}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data=f"imp:cancel:{chat_id}")]
+        ])
+    else:
+        # Game is playing
+        text = (
+            f"🕵️‍♂️ **Imposter Game Started!**\n\n"
+            f"There is **1 Imposter** among us.\n"
+            f"Everyone else knows the secret word.\n\n"
+            f"**Players:**\n{players_list}\n\n"
+            f"1. Click '👀 Check Role' to see if you are the Imposter or a Civilian.\n"
+            f"2. Discuss and find out who is lying!\n"
+            f"3. Host can end the game to reveal the truth."
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👀 Check Role (Secret)", callback_data=f"imp:role:{chat_id}")],
+            [InlineKeyboardButton("🛑 End Game & Reveal", callback_data=f"imp:end:{chat_id}")]
+        ])
+
+    # Attempt to edit the message. If context has match_msg_id or similar, use it.
+    # Simplified approach: We rely on the callback query to edit, or send new if needed.
+    # Since this is a helper, we assume it's triggered by a callback or command.
+    pass 
+
+
+async def imposter_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer() # Acknowledge tap
+    
+    data = q.data
+    if not data.startswith("imp:"):
+        return
+
+    parts = data.split(":")
+    action = parts[1]
+    chat_id = int(parts[2])
+    user = q.from_user
+
+    game = IMPOSTER_GAMES.get(chat_id)
+
+    # 1. Handle Cancel (Stop)
+    if action == "cancel":
+        if not game:
+            await q.edit_message_text("Game session expired.")
+            return
+        if user.id != game["host_id"]:
+            await q.answer("Only the host can cancel the game!", show_alert=True)
+            return
+        del IMPOSTER_GAMES[chat_id]
+        await q.edit_message_text("❌ Game cancelled by host.")
+        return
+
+    # 2. Handle End (Reveal)
+    if action == "end":
+        if not game or game["status"] != "playing":
+            return
+        if user.id != game["host_id"]:
+            await q.answer("Only the host can end the game!", show_alert=True)
+            return
+        
+        imposter_name = game["players"].get(game["imposter_id"], "Unknown")
+        word = game["word"]
+        del IMPOSTER_GAMES[chat_id]
+        
+        await q.edit_message_text(
+            f"🛑 **Game Over!**\n\n"
+            f"👺 The Imposter was: **{imposter_name}**\n"
+            f"📍 The Word was: **{word}**",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    # 3. Handle Join/Leave
+    if action == "join":
+        if not game or game["status"] != "waiting":
+            await q.answer("Game already started or finished.", show_alert=True)
+            return
+        
+        if user.id in game["players"]:
+            # Leave
+            if user.id == game["host_id"]:
+                 await q.answer("Host cannot leave. Cancel instead.", show_alert=True)
+                 return
+            del game["players"][user.id]
+            await q.answer("You left the game.")
+        else:
+            # Join
+            game["players"][user.id] = user.full_name
+            await q.answer("You joined!")
+
+        # Refresh UI
+        await _refresh_ui(q, game)
+        return
+
+    # 4. Handle Start
+    if action == "start":
+        if not game:
+            return
+        if user.id != game["host_id"]:
+            await q.answer("Only the host can start!", show_alert=True)
+            return
+        if len(game["players"]) < 3:
+            await q.answer("Need at least 3 players to start!", show_alert=True)
+            return
+        
+        # Setup Game
+        import random
+        game["status"] = "playing"
+        game["word"] = random.choice(IMPOSTER_WORDS)
+        all_ids = list(game["players"].keys())
+        game["imposter_id"] = random.choice(all_ids)
+        
+        await q.answer("Game started! Check your roles.")
+        await _refresh_ui(q, game)
+        return
+
+    # 5. Handle Check Role
+    if action == "role":
+        if not game or game["status"] != "playing":
+            await q.answer("Game not active.", show_alert=True)
+            return
+        
+        if user.id not in game["players"]:
+            await q.answer("You are not in this game!", show_alert=True)
+            return
+        
+        # LOGIC:
+        if user.id == game["imposter_id"]:
+            await q.answer(
+                "🤫 YOU ARE THE IMPOSTER!\n\n"
+                "You don't know the Word.\n"
+                "Listen to others and try to blend in!",
+                show_alert=True
+            )
+        else:
+            word = game["word"]
+            await q.answer(
+                f"📍 Secret Word: {word}\n\n"
+                f"Prove you know this word without revealing it too obviously!\n"
+                f"Watch out for the Imposter.",
+                show_alert=True
+            )
+        return
+
+async def _refresh_ui(query, game):
+    """Updates the lobby/game message."""
+    players_list = "\n".join([f"• {name}" for name in game["players"].values()])
+    
+    if game["status"] == "waiting":
+        text = (
+            f"🕵️‍♂️ **Imposter Game** (Lobby)\n"
+            f"Host: {game['host_name']}\n\n"
+            f"**Players ({len(game['players'])}):**\n{players_list}\n\n"
+            f"Press Join to enter. Host presses Start when ready."
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Join / Leave", callback_data=f"imp:join:{query.message.chat_id}")],
+            [InlineKeyboardButton("🚀 Start Game", callback_data=f"imp:start:{query.message.chat_id}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data=f"imp:cancel:{query.message.chat_id}")]
+        ])
+    else:
+        text = (
+            f"👺 **Imposter Game Running**\n\n"
+            f"There is **1 Imposter** among us.\n"
+            f"Everyone else is at the same **Word**.\n\n"
+            f"**Players:**\n{players_list}\n\n"
+            f"⚠️ Tap 'Check Role' to see your secret!"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👀 Check Role (Tap Me)", callback_data=f"imp:role:{query.message.chat_id}")],
+            [InlineKeyboardButton("🛑 End Game & Reveal", callback_data=f"imp:end:{query.message.chat_id}")]
+        ])
+    
+    try:
+        await query.edit_message_text(text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        pass  # Message not modified
 
 
 
@@ -2836,6 +3088,9 @@ def main():
             sms_purge,
         )
     )
+    # IMPOSTER GAME HANDLERS
+    app.add_handler(CommandHandler(["imposter", "spy", "amongus"], imposter_cmd))
+    app.add_handler(CallbackQueryHandler(imposter_callback, pattern=r"^imp:"))
 
     logging.getLogger(__name__).info("🤖 Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
