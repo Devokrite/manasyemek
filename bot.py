@@ -3104,6 +3104,7 @@ def main():
     # IMPOSTER GAME HANDLERS
     app.add_handler(CommandHandler(["imposter", "spy", "amongus"], imposter_cmd))
     app.add_handler(CallbackQueryHandler(imposter_callback, pattern=r"^imp:"))
+    app.add_handler(CommandHandler(["endgame", "stopgame", "end"], imposter_force_end))
 
     logging.getLogger(__name__).info("🤖 Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
