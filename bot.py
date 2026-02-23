@@ -115,6 +115,86 @@ SCHEDULE: dict[int, list[str]] = {
     6: ["Отдых"],  # Воскресенье
 }
 
+# =======================
+# RAMADAN 2026 – BISHKEK
+# =======================
+
+IFTAR_TIMES = {
+    "2026-02-19": {"suhoor_end": "06:19", "iftar": "18:45"},
+    "2026-02-20": {"suhoor_end": "06:17", "iftar": "18:46"},
+    "2026-02-21": {"suhoor_end": "06:16", "iftar": "18:47"},
+    "2026-02-22": {"suhoor_end": "06:14", "iftar": "18:49"},
+    "2026-02-23": {"suhoor_end": "06:13", "iftar": "18:50"},
+    "2026-02-24": {"suhoor_end": "06:11", "iftar": "18:51"},
+    "2026-02-25": {"suhoor_end": "06:10", "iftar": "18:53"},
+    "2026-02-26": {"suhoor_end": "06:08", "iftar": "18:54"},
+    "2026-02-27": {"suhoor_end": "06:07", "iftar": "18:55"},
+    "2026-02-28": {"suhoor_end": "06:05", "iftar": "18:56"},
+    "2026-03-01": {"suhoor_end": "06:04", "iftar": "18:58"},
+    "2026-03-02": {"suhoor_end": "06:02", "iftar": "18:59"},
+    "2026-03-03": {"suhoor_end": "06:00", "iftar": "19:00"},
+    "2026-03-04": {"suhoor_end": "05:59", "iftar": "19:01"},
+    "2026-03-05": {"suhoor_end": "05:57", "iftar": "19:03"},
+    "2026-03-06": {"suhoor_end": "05:55", "iftar": "19:04"},
+    "2026-03-07": {"suhoor_end": "05:54", "iftar": "19:05"},
+    "2026-03-08": {"suhoor_end": "05:52", "iftar": "19:06"},
+    "2026-03-09": {"suhoor_end": "05:50", "iftar": "19:07"},
+    "2026-03-10": {"suhoor_end": "05:48", "iftar": "19:09"},
+    "2026-03-11": {"suhoor_end": "05:47", "iftar": "19:10"},
+    "2026-03-12": {"suhoor_end": "05:45", "iftar": "19:11"},
+    "2026-03-13": {"suhoor_end": "05:43", "iftar": "19:12"},
+    "2026-03-14": {"suhoor_end": "05:41", "iftar": "19:13"},
+    "2026-03-15": {"suhoor_end": "05:39", "iftar": "19:15"},
+    "2026-03-16": {"suhoor_end": "05:37", "iftar": "19:16"},
+    "2026-03-17": {"suhoor_end": "05:36", "iftar": "19:17"},
+    "2026-03-18": {"suhoor_end": "05:34", "iftar": "19:18"},
+    "2026-03-19": {"suhoor_end": "05:32", "iftar": "19:19"},
+    "2026-03-20": {"suhoor_end": "05:30", "iftar": "19:21"},
+}
+
+def format_iftar(dt: datetime) -> str:
+    date_key = dt.strftime("%Y-%m-%d")
+    info = IFTAR_TIMES.get(date_key)
+
+    if not info:
+        return "❌ Нет данных для этой даты."
+
+    return (
+        f"🕌 <b>Орозо убактысы (Бишкек)</b>\n"
+        f"📅 <b>{dt.strftime('%d.%m.%Y')}</b>\n\n"
+        f"🌙 Сухур до: <b>{info['suhoor_end']}</b>\n"
+        f"🌅 Ифтар: <b>{info['iftar']}</b>"
+    )
+
+
+def iftar_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📍 Сегодня", callback_data="iftar_0")],
+        [InlineKeyboardButton("➡ Завтра", callback_data="iftar_1")],
+        [InlineKeyboardButton("⏭ Послезавтра", callback_data="iftar_2")],
+    ])
+
+
+async def iftar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🕌 Выберите день:",
+        reply_markup=iftar_keyboard()
+    )
+
+
+async def iftar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    offset = int(query.data.split("_")[1])
+
+    now = datetime.now(BISHKEK_TZ)
+    selected_date = now + timedelta(days=offset)
+
+    await query.edit_message_text(
+        format_iftar(selected_date),
+        parse_mode=ParseMode.HTML
+    )
 # ====== Улучшенный формат расписания ======
 _item_re = re.compile(
     r"^(?P<time>\d{2}:\d{2}–\d{2}:\d{2})\s+"
@@ -3093,6 +3173,8 @@ def main():
     # =========================
     # Your generic callback handler (must be AFTER croc_callback above)
     # =========================
+    app.add_handler(CommandHandler("iftar", iftar_command))
+app.add_handler(CallbackQueryHandler(iftar_callback, pattern="^iftar_"))
     app.add_handler(CommandHandler("secret", secret_cmd))
     app.add_handler(CallbackQueryHandler(secret_reveal_cb, pattern=r"^sc\|"))
     app.add_handler(CallbackQueryHandler(schedule_cb, pattern=r"^sch:"))
@@ -3103,6 +3185,7 @@ def main():
     # =========================
 
     # Add to existing /start handler or create new one:
+    
     app.add_handler(CommandHandler("start", start_with_token))
     app.add_handler(CommandHandler("qotd", qotd))
     app.add_handler(CommandHandler("coinflip", coinflip))
