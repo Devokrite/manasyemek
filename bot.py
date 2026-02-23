@@ -3174,7 +3174,7 @@ def main():
     # Your generic callback handler (must be AFTER croc_callback above)
     # =========================
     app.add_handler(CommandHandler("iftar", iftar_command))
-app.add_handler(CallbackQueryHandler(iftar_callback, pattern="^iftar_"))
+    app.add_handler(CallbackQueryHandler(iftar_callback, pattern="^iftar_"))
     app.add_handler(CommandHandler("secret", secret_cmd))
     app.add_handler(CallbackQueryHandler(secret_reveal_cb, pattern=r"^sc\|"))
     app.add_handler(CallbackQueryHandler(schedule_cb, pattern=r"^sch:"))
