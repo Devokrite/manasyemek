@@ -1020,447 +1020,13 @@ def media_group_for(dishes: list[dict]):
             media.append(InputMediaPhoto(media=d["img"]))  # <-- no caption
     return media
 
-# ===================== /schedule =====================
-# ---- Departments & Days (STATIC MODE) ----
-DEPARTMENTS = [
-    ("management", "Management"),
-    ("programming", "Programming"),
-    ("electrical", "Electrical Engineering"),
-    ("biology", "Biology"),
-]
-DAYS = [
-    ("today", "Сегодня"),
-    ("tomorrow", "Завтра"),
-    ("week", "Вся неделя"),
-]
-DEPT_LABEL = {k: v for k, v in DEPARTMENTS}
-
-def kb_departments() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(text=label, callback_data=f"sch:dept:{key}")]
-         for key, label in DEPARTMENTS]
-    )
-
-def kb_days(dept_key: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(text=label, callback_data=f"sch:day:{dept_key}:{day_key}")]
-         for day_key, label in DAYS]
-    )
-
-# --- DROP YOUR LESSONS HERE ---
-# Format idea: each day is a list of lines; "week" will just join them by day.
-# ---- COMPUTER ENGINEERING (Bilgisayar Mühendisliği) ----
-SCHED_PROGRAMMING = {
-    "monday": [
-        "08:00–08:45 | Reserved (Ayrılmış)",
-        "08:55–09:40 | UME-1101 Fizik I (Uygulama) | Nazgul Abdanbayeva | MFFB 118",
-        "09:50–10:35 | BIL-1012 Bilgisayar Mühendisliğine Giriş | Cinara Cumabayeva | MFFB 524",
-        "10:45–11:30 | UME-1101 Fizik I (Uygulama) | Nazgul Abdanbayeva | MFFB 118",
-        "11:40–12:25 | BIL-1010 Bilgisayar Mühendisliğine Giriş | Mehmet Kenan Dönmez | MFFB 524",
-        "13:30–14:15 | MAT-173 Cebir ve Uygulamaları | Peyil Tesengul Kızı | IIBF 128",
-        "14:25–15:10 | MAT-173 Cebir ve Uygulamaları | Peyil Tesengul Kızı | IIBF 128",
-        "16:15–17:00 | BES-111(FK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-        "17:10–17:55 | BES-111(FK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-    ],
-    "tuesday": [
-        "08:00–08:45 | UME-1101 Fizik I (Uygulama) | Nazgul Abdanbayeva | MFFB 118",
-        "08:55–09:40 | MAT-17105 Matematik I | Asan Bayzakov | MFFB 301",
-        "09:50–10:35 | MAT-17105 Matematik I | Asan Bayzakov | MFFB 301",
-        "10:45–11:30 | MAT-17105 Matematik I | Asan Bayzakov | MFFB 301",
-        "11:40–12:25 | MAT-17105 Matematik I | Asan Bayzakov | MFFB 301",
-        "13:30–14:15 | BIL-1017 Programlama Dilleri I (Yan ve Ödev) | Bakıt Şarşembayev | MFFB 525",
-        "14:25–15:10 | BIL-1017 Programlama Dilleri I (Yan ve Ödev) | Bakıt Şarşembayev | MFFB 525",
-        "15:20–16:05 | BIL-1017 Programlama Dilleri I (Yan ve Ödev) | Bakıt Şarşembayev | MFFB 525",
-        "16:15–17:00 | BES-111(FK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-        "17:10–17:55 | BES-111(FK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-    ],
-    "wednesday": [
-        "08:00–08:45 | Reserved (Ayrılmış)",
-        "08:55–09:40 | UME-1102 Genel Fizik I | Tamara Karaşeva | IIBF 128",
-        "09:50–10:35 | UME-1102 Genel Fizik I | Tamara Karaşeva | IIBF 128",
-        "10:45–11:30 | UME-1102 Genel Fizik I | Tamara Karaşeva | IIBF 128",
-        "11:40–12:25 | UME-1102 Genel Fizik I | Tamara Karaşeva | IIBF 128",
-        "13:30–14:15 | BIL-1017 Programlama Dilleri I (Yan ve Ödev) | Bakıt Şarşembayev | MFFB 525",
-        "14:25–15:10 | BIL-1017 Programlama Dilleri I (Yan ve Ödev) | Bakıt Şarşembayev | MFFB 525",
-        "15:20–16:05 | BIL-1017 Programlama Dilleri I (Yan ve Ödev) | Bakıt Şarşembayev | MFFB 525",
-        "16:15–17:00 | BES-111(FK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-        "17:10–17:55 | BES-111(FK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-    ],
-    "thursday": [
-        "08:55–09:40 | MAT-17105 Matematik I | Asan Bayzakov | IIBF 127",
-        "09:50–10:35 | MAT-17105 Matematik I | Asan Bayzakov | IIBF 127",
-        "10:45–11:30 | MAT-17105 Matematik I | Asan Bayzakov | IIBF 127",
-        "11:40–12:25 | MAT-17105 Matematik I | Asan Bayzakov | IIBF 127",
-        "13:30–14:15 | KGZ-103 Kırgız Dili ve Edebiyatı I | Aynura Beyşeyeva | IIBF 127",
-        "14:25–15:10 | KGZ-103 Kırgız Dili ve Edebiyatı I | Aynura Beyşeyeva | IIBF 127",
-        "15:20–16:05 | BES-111 Beden Eğitimi ve Spor I | Sıyimyk Artasınbekov | KSSB Spor Sahası",
-        "16:15–17:00 | ING-111 İngilizce I | Svetlana Çenebekova | MFFB Online",
-        "17:10–17:55 | ING-111 İngilizce I | Svetlana Çenebekova | MFFB Online",
-    ],
-    "friday": [
-        "08:55–09:40 | UME-1101 Genel Fizik I | Tamara Karaşeva | IIBF 128",
-        "09:50–10:35 | UME-1101 Genel Fizik I | Tamara Karaşeva | IIBF 128",
-        "10:45–11:30 | UME-1101 Genel Fizik I | Tamara Karaşeva | IIBF 128",
-        "11:40–12:25 | UME-1101 Genel Fizik I | Tamara Karaşeva | IIBF 128",
-        "13:30–14:15 | BES-111 Beden Eğitimi ve Spor I (Teorik) | Atila Çakar | KSSB Online Sport",
-        "14:25–15:10 | BES-111 Beden Eğitimi ve Spor I (Teorik) | Atila Çakar | KSSB Online Sport",
-    ],
-    "saturday": [],
-    "sunday": [],
-}
-
-
-# ---- ELECTRICAL & ELECTRONICS ENGINEERING (Elektrik-Elektronik Mühendisliği) ----
-SCHED_ELECTRICAL = {
-    "monday": [
-        "08:55–09:40 | EEM-143 C Programlama | Aybek Adanbayev | IIBF 111",
-        "09:50–10:35 | EEM-143 C Programlama | Aybek Adanbayev | IIBF 111",
-        "10:45–11:30 | EEM-143 C Programlama | Aybek Adanbayev | IIBF 111",
-        "11:40–12:25 | EEM-143 C Programlama | Aybek Adanbayev | IIBF 111",
-        "13:30–14:15 | UME-1105 Fizik I (Uygulama) | Azat Akmatbekova | MFFB 118",
-        "14:25–15:10 | UME-1105 Fizik I (Uygulama) | Azat Akmatbekova | MFFB 118",
-        "16:15–17:00 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-        "17:10–17:55 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-    ],
-    "tuesday": [
-        "08:55–09:40 | MAT-17105 Matematik I | Asan Bayzakov | MFFB 301",
-        "09:50–10:35 | MAT-17105 Matematik I | Asan Bayzakov | MFFB 301",
-        "10:45–11:30 | KMM-109.02 Genel Kimya (Teori) | Ferhan Tümer | MFFB 401",
-        "11:40–12:25 | KMM-109.02 Genel Kimya (Teori) | Ferhan Tümer | MFFB 401",
-        "13:30–14:15 | EIM-113.01 Mesleki Yabancı Dil I (İngilizce) | Köksal Erentürk | MFFB 513",
-        "14:25–15:10 | EIM-113.01 Mesleki Yabancı Dil I (İngilizce) | Köksal Erentürk | MFFB 513",
-        "16:15–17:00 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-        "17:10–17:55 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-    ],
-    "wednesday": [
-        "08:55–09:40 | UME-111 Genel Fizik I | Meerim İmaş Kızı | MFFB 303",
-        "09:50–10:35 | UME-111 Genel Fizik I | Meerim İmaş Kızı | MFFB 303",
-        "10:45–11:30 | UME-111 Genel Fizik I | Meerim İmaş Kızı | MFFB 303",
-        "11:40–12:25 | UME-111 Genel Fizik I | Meerim İmaş Kızı | MFFB 303",
-        "13:30–14:15 | KMM-109.08 Genel Kimya (Uygulama) | Nurzat Şaykieva | MFFB 321",
-        "14:25–15:10 | KMM-109.08 Genel Kimya (Uygulama) | Nurzat Şaykieva | MFFB 321",
-    ],
-    "thursday": [
-        "08:55–09:40 | KGZ-103 Kırgız Dili ve Edebiyatı I | Aynura Beyşeyeva | MFFB 106",
-        "09:50–10:35 | KGZ-103 Kırgız Dili ve Edebiyatı I | Aynura Beyşeyeva | MFFB 106",
-        "10:45–11:30 | KGZ-103 Kırgız Dili ve Edebiyatı I | Aynura Beyşeyeva | MFFB 106",
-        "11:40–12:25 | KGZ-103 Kırgız Dili ve Edebiyatı I | Aynura Beyşeyeva | MFFB 106",
-        "13:30–14:15 | BES-111 Beden Eğitimi ve Spor I | Sıyimyk Artasınbekov | KSSB Spor Sahası (Kapalı)",
-        "14:25–15:10 | BES-111 Beden Eğitimi ve Spor I | Sıyimyk Artasınbekov | KSSB Spor Sahası (Kapalı)",
-    ],
-    "friday": [
-        "08:55–09:40 | EEM-103 Elektrik-Elektronik Mühendisliğine Giriş ve Kariyer Planlama | Mehmet Karadeniz | MFFB 501",
-        "09:50–10:35 | EEM-103 Elektrik-Elektronik Mühendisliğine Giriş ve Kariyer Planlama | Mehmet Karadeniz | MFFB 501",
-        "10:45–11:30 | MAT-17105 Matematik I | Asan Bayzakov | MFFB 301",
-        "11:40–12:25 | MAT-17105 Matematik I | Asan Bayzakov | MFFB 301",
-        "13:30–14:15 | RSC-103 Rusça I | Svetlana Parmanasova | MFFB Online",
-        "14:25–15:10 | RSC-103 Rusça I | Svetlana Parmanasova | MFFB Online",
-        "16:15–17:00 | ING-111 İngilizce I | Svetlana Çenebekova | MFFB Online",
-        "17:10–17:55 | ING-111 İngilizce I | Svetlana Çenebekova | MFFB Online",
-    ],
-    "saturday": [],
-    "sunday": [],
-}
-# ---- BIOLOGY (Biyoloji) ----
-SCHED_BIOLOGY = {
-    "monday": [
-        "08:55–09:40 | BIO-103 Genel Zooloji | Bermet Kidiralieva | MFFB 221",
-        "09:50–10:35 | BIO-103 Genel Zooloji | Bermet Kidiralieva | MFFB 223",
-        "10:45–11:30 | MAT-110 Matematik I | Bakıtbay Ablabekov | MFFB 221",
-        "11:40–12:25 | MAT-110 Matematik I | Bakıtbay Ablabekov | MFFB 221",
-        "13:30–14:15 | BIO-103 Genel Zooloji | Bermet Kidiralieva | MFFB 223",
-        "14:25–15:10 | BIO-103 Genel Zooloji | Bermet Kidiralieva | MFFB 223",
-        "16:15–17:00 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-        "17:10–17:55 | BIL-100 Enformatik | Çınara Cumabayeva | IIBF Online",
-    ],
-    "tuesday": [
-        "10:45–11:30 | KMM-113(U) Genel Kimya (Uygulama) | Nurzat Şaykieva | MFFB 321",
-        "11:40–12:25 | KMM-113(U) Genel Kimya (Uygulama) | Nurzat Şaykieva | MFFB 321",
-        "13:30–14:15 | BIO-101 Genel Botanik | Miskalay Ganiyabayeva | MFFB 202",
-        "14:25–15:10 | BIO-101 Genel Botanik | Miskalay Ganiyabayeva | MFFB 202",
-        "15:20–16:05 | BIO-101 Genel Botanik | Miskalay Ganiyabayeva | MFFB 222",
-        "16:15–17:00 | BIO-101 Genel Botanik | Miskalay Ganiyabayeva | MFFB 222",
-        "17:10–17:55 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-    ],
-    "wednesday": [
-        "10:45–11:30 | MAT-110 Matematik I | Bakıtbay Ablabekov | MFFB 202",
-        "11:40–12:25 | MAT-110 Matematik I | Bakıtbay Ablabekov | MFFB 202",
-        "13:30–14:15 | BES-111 Beden Eğitimi ve Spor I | Azamat Tillabayev | KSSB Spor sahası (kapalı)",
-        "14:25–15:10 | BES-111 Beden Eğitimi ve Spor I | Azamat Tillabayev | KSSB Spor sahası (kapalı)",
-        "16:15–17:00 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-        "17:10–17:55 | BES-111(LFK) Beden Eğitimi ve Spor I (Sağlık Grubu) | Emiliya Bojirova | KSSB A-1",
-    ],
-    "thursday": [
-        "10:45–11:30 | BIL-100 Enformatik | Çınara Cumabayeva | IIBF 111",
-        "11:40–12:25 | BIL-100 Enformatik | Çınara Cumabayeva | IIBF 111",
-        "16:15–17:00 | ING-111 İngilizce I | Svetlana Çenebekova | MFFB Online",
-        "17:10–17:55 | ING-111 İngilizce I | Svetlana Çenebekova | MFFB Online",
-    ],
-    "friday": [
-        "08:55–09:40 | BIO-105 Hücre Biyolojisi | Caynagül Isakova | MFFB 202",
-        "09:50–10:35 | BIO-105 Hücre Biyolojisi | Caynagül Isakova | MFFB 202",
-        "10:45–11:30 | BIO-105 Hücre Biyolojisi | Caynagül Isakova | MFFB 222",
-        "11:40–12:25 | BIO-105 Hücre Biyolojisi | Caynagül Isakova | MFFB 222",
-        "13:30–14:15 | KGZ-103 Kırgız Dili ve Edebiyatı I | Aynura Beyşeyeva | ZIRF 205",
-        "14:25–15:10 | KGZ-103 Kırgız Dili ve Edebiyatı I | Aynura Beyşeyeva | ZIRF 205",
-        "16:15–17:00 | RSC-103 Rusça I | Svetlana Parmanasova | MFFB Online",
-        "17:10–17:55 | RSC-103 Rusça I | Svetlana Parmanasova | MFFB Online",
-    ],
-    "saturday": [],
-    "sunday": [],
-}
-
-
-# Helpers to reuse for any department table (similar spirit to your _fmt_day_lines/_fmt_week)
-def _weekday_key(dt: datetime) -> str:
-    names = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
-    return names[dt.weekday()]
-
-def _fmt_day_from(table: dict[str, list[str]], dt: datetime, title: str) -> str:
-    """
-    Renders NON-management tables in the same visual style as Management:
-      • <BOLD COURSE>  |  <code>HH:MM–HH:MM</code>
-        <i>Teacher · Room</i>
-    Accepts each lesson as a single string:
-      "HH:MM–HH:MM | Course | Teacher | Room"
-    """
-    wk = _weekday_key(dt)
-    rows = table.get(wk, [])
-    if not rows:
-        return f"📚 <b>{title}</b>\n\nНет пар на этот день."
-
-    out = [f"📚 <b>{title}</b>\n"]
-    for raw in rows:
-        # Split exactly into 4 pieces
-        parts = [p.strip() for p in raw.split("|")]
-        # tolerate lines with extra pipes
-        if len(parts) >= 4:
-            time_s, course, teacher, room = parts[0], parts[1], parts[2], parts[3]
-        else:
-            # fallback: show raw line
-            out.append(raw)
-            out.append("")
-            continue
-
-        course_up = course.strip().upper()
-        time_code = f"<code>{time_s.strip()}</code>"
-        teacher_room = f"<i>{teacher.strip()} · {room.strip()}</i>"
-
-        # two-line block like Management
-        out.append(f"• <b>{course_up}</b>  {time_code}")
-        out.append(teacher_room)
-        out.append("")  # blank line between lessons
-
-    return "\n".join(out).rstrip()
-
-def _fmt_week_from(table: dict[str, list[str]], title: str) -> str:
-    """
-    Same visual style as Management, grouped by weekday.
-    Expects the same per-row string format as _fmt_day_from.
-    """
-    order = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
-    day_ru = {
-        "monday": "Пн", "tuesday": "Вт", "wednesday": "Ср",
-        "thursday": "Чт", "friday": "Пт", "saturday": "Сб", "sunday": "Вс"
-    }
-    blocks: list[str] = [f"📅 <b>{title}</b> — вся неделя\n"]
-
-    for k in order:
-        rows = table.get(k, [])
-        blocks.append(f"<b>{day_ru[k]}</b>")
-        if not rows:
-            blocks.append("—")
-            blocks.append("")
-            continue
-
-        for raw in rows:
-            parts = [p.strip() for p in raw.split("|")]
-            if len(parts) >= 4:
-                time_s, course, teacher, room = parts[0], parts[1], parts[2], parts[3]
-                course_up = course.upper()
-                time_code = f"<code>{time_s}</code>"
-                blocks.append(f"• <b>{course_up}</b>  {time_code}")
-                blocks.append(f"<i>{teacher} · {room}</i>")
-                blocks.append("")
-            else:
-                blocks.append(raw)
-                blocks.append("")
-
-    return "\n".join(blocks).rstrip()
-
-def _schedule_text_for(dept_key: str, day_key: str, now: datetime) -> str:
-    if dept_key == "management":
-        # use your existing pretty output for Management
-        if day_key == "today":
-            return _fmt_day_lines(now)
-        elif day_key == "tomorrow":
-            return _fmt_day_lines(now + timedelta(days=1))
-        elif day_key == "week":
-            return _fmt_week(now)
-        return "Неизвестный период."
-
-    # Static tables for other departments
-    if dept_key == "programming":
-        title = f"{DEPT_LABEL['programming']}"
-        if day_key == "today":
-            return _fmt_day_from(SCHED_PROGRAMMING, now, title)
-        elif day_key == "tomorrow":
-            return _fmt_day_from(SCHED_PROGRAMMING, now + timedelta(days=1), title)
-        elif day_key == "week":
-            return _fmt_week_from(SCHED_PROGRAMMING, title)
-        return "Неизвестный период."
-
-    if dept_key == "electrical":
-        title = f"{DEPT_LABEL['electrical']}"
-        if day_key == "today":
-            return _fmt_day_from(SCHED_ELECTRICAL, now, title)
-        elif day_key == "tomorrow":
-            return _fmt_day_from(SCHED_ELECTRICAL, now + timedelta(days=1), title)
-        elif day_key == "week":
-            return _fmt_week_from(SCHED_ELECTRICAL, title)
-        return "Неизвестный период."
-    if dept_key == "biology":
-        title = DEPT_LABEL["biology"]
-        if day_key == "today":
-            return _fmt_day_from(SCHED_BIOLOGY, now, title)
-        elif day_key == "tomorrow":
-            return _fmt_day_from(SCHED_BIOLOGY, now + timedelta(days=1), title)
-        elif day_key == "week":
-            return _fmt_week_from(SCHED_BIOLOGY, title)
-        return "Неизвестный период."
-
-
-    return "Неизвестная кафедра."
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text(
-        "📚 Расписание → выберите кафедру:",
-        reply_markup=kb_departments(),
-        parse_mode=ParseMode.HTML,
-    )
-
-
-async def schedule_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = (q.data or "")
-    now = datetime.now(BISHKEK_TZ)
-
-    # Step 1: department -> show day choices
-    if data.startswith("sch:dept:"):
-        dept_key = data.split(":", 2)[2]
-        pretty = DEPT_LABEL.get(dept_key, dept_key)
-        await q.edit_message_text(
-            text=f"Кафедра: <b>{pretty}</b>\nТеперь выберите период:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_days(dept_key),
-        )
-        return
-
-    # Step 2: day -> show schedule
-    if data.startswith("sch:day:"):
-        _, _, dept_key, day_key = data.split(":", 3)
-        text = _schedule_text_for(dept_key, day_key, now)
-
-        # For long week output you can send as a fresh message (optional)
-        if day_key == "week" and dept_key == "management":
-            try:
-                await q.edit_message_text(f"📅 {DEPT_LABEL.get(dept_key, dept_key)} — вся неделя:")
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=q.message.chat_id, text=text, parse_mode=ParseMode.HTML
-            )
-        else:
-            await q.edit_message_text(text, parse_mode=ParseMode.HTML)
-        return
-
-    # Back-compat if old buttons are clicked
-    if data in ("sch:today", "sch:tomorrow", "sch:week"):
-        await q.edit_message_text("Обновлено: сначала выберите кафедру через /schedule")
-        return
-
-
-
-
-
 # ======================= ADDED COMMANDS 
-# ===================== QOTD & COINFLIP =====================
+# ===================== QOTD(removed) & COINFLIP =====================
 import random
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
 
-# --- Quote of the Day ---
-_QOTD_LOCAL = [
-    ("Чем умнее человек, тем легче он признает себя дураком.", "Альберт Эйнштейн"),
-    ("Никогда не ошибается тот, кто ничего не делает.", "Теодор Рузвельт"),
-    ("Менее всего просты люди, желающие казаться простыми.", "Лев Николаевич Толстой"),
-    ("Мы находимся здесь, чтобы внести свой вклад в этот мир. Иначе зачем мы здесь?", "Стив Джобс"),
-    ("Мода проходит, стиль остаётся.", "Коко Шанель"),
-    ("Если человек не нашёл, за что может умереть, он не способен жить.", "Мартин Лютер Кинг"),
-    ("Музыка заводит сердца так, что пляшет и поёт тело. А есть музыка, с которой хочется поделиться всем, что наболело.", "Джон Леннон"),
-    ("Если кто-то причинил тебе зло, не мсти. Сядь на берегу реки, и вскоре ты увидишь, как мимо тебя проплывает труп твоего врага.", "Лао-цзы"),
-    ("Лучше быть хорошим человеком, 'ругающимся матом', чем тихой, воспитанной тварью.", "Фаина Раневская"),
-    ("Если тебе тяжело, значит ты поднимаешься в гору. Если тебе легко, значит ты летишь в пропасть.", "Генри Форд"),
-    ("Мой способ шутить – это говорить правду. На свете нет ничего смешнее.", "Бернард Шоу"),
-    ("Чем больше любви, мудрости, красоты, доброты вы откроете в самом себе, тем больше вы заметите их в окружающем мире.", "Мать Тереза"),
-    ("Единственный человек, с которым вы должны сравнивать себя, – это вы в прошлом. И единственный человек, лучше которого вы должны быть, – это вы сейчас.", "Зигмунд Фрейд"),
-    ("Невозможность писать для меня равносильна погребению заживо...", "Михаил Булгаков"),
-    ("История – самый лучший учитель, у которого самые плохие ученики.", "Индира Ганди"),
-    ("Дай человеку власть, и ты узнаешь, кто он.", "Наполеон Бонапарт"),
-    ("Ядерную войну невозможно выиграть.", "Андрей Сахаров"),
-    ("Поражение? Я не понимаю значения этого слова.", "Маргарет Тэтчер"),
-    ("Некоторые люди проводят жизнь в поисках любви вне их самих... Пока любовь в моём сердце, она повсюду.", "Майкл Джексон"),
-    ("Человечество обладает одним поистине мощным оружием, и это смех.", "Марк Твен"),
-    ("Тренируйся с теми, кто сильнее. Не сдавайся там, где сдаются другие. И победишь там, где победить нельзя.", "Брюс Ли"),
-    ("Комедия – это очень серьёзное дело!", "Юрий Никулин"),
-    ("Будьте менее любопытны о людях, но более любопытны об идеях.", "Мария Кюри"),
-    ("Когда я собираюсь писать новый сценарий, самое трудное для меня – это пойти в канцтовары и купить блокнот.", "Квентин Тарантино"),
-    ("Ненавижу всяческую мертвечину! Обожаю всяческую жизнь!", "Владимир Маяковский"),
-    ("Мышление – верх блаженства и радость жизни, доблестнейшее занятие человека.", "Аристотель"),
-    ("У тебя есть враги? Хорошо. Значит, в своей жизни ты что-то когда-то отстаивал.", "Уинстон Черчилль"),
-    ("Когда-нибудь не страшно умереть – страшно умереть вот сейчас.", "Александр Солженицын"),
-    ("Я серьёзно отношусь к своей работе, а это возможно только при несерьёзном отношении к собственной персоне.", "Алан Рикман"),
-    ("Характер – это и есть судьба.", "Майя Плисецкая"),
-    ("Внимай лишь одному учителю – Природе.", "Рембрандт"),
-    ("Успех – паршивый учитель. Он заставляет умных людей думать, что они не могут проиграть.", "Билл Гейтс"),
-    ("Чемпионами становятся не в тренажёрных залах. Чемпиона рождает то, что у человека внутри: желания, мечты, цели.", "Мухаммед Али"),
-    ("Люди – слишком сложные существа, чтобы понять их полностью.", "Том Хэнкс"),
-    ("Перспектива рано умереть заставила меня понять, что жизнь стоит того, чтобы её прожить.", "Стивен Хокинг"),
-    ("Не так уж сложно изменить общество – сложно изменить себя.", "Нельсон Мандела"),
-    ("Необходимо, чтобы художник, кроме глаза, воспитывал и свою душу.", "Василий Кандинский"),
-    ("Я дышу, и значит – я люблю! Я люблю, и значит – я живу!", "Владимир Высоцкий"),
-    ("Фантазия мужчины – лучшее оружие женщины.", "Софи Лорен"),
-    ("То, что мы знаем, это капля, а то, что мы не знаем, это океан.", "Исаак Ньютон"),
-    ("Ни высокий интеллект, ни воображение, ни то и другое вместе не творят гения. Любовь, любовь и любовь – вот в чём сущность гения.", "Вольфганг Амадей Моцарт"),
-    ("Оправдайте, не карайте, но назовите зло злом.", "Фёдор Достоевский"),
-    ("Не оборачивается тот, кто устремлён к звёздам.", "Леонардо да Винчи"),
-    ("Ненавижу советы – все, кроме своих.", "Джек Николсон"),
-    ("Красота женщины множится вместе с её годами.", "Одри Хепберн"),
-    ("Шире открой глаза, живи так жадно, как будто через десять секунд умрёшь. Старайся увидеть мир. Он прекраснее любой мечты, созданной на фабрике и оплаченной деньгами. Не проси гарантий, не ищи покоя – такого зверя нет на свете.", "Рэй Брэдбери"),
-    ("Я пью, чтобы окружающие меня люди становились интереснее.", "Эрнест Хемингуэй"),
-    ("Видите ли, художника отличает то, что в его жизни бывают минуты, когда он ощущает себя больше чем человеком.", "Ле Корбюзье"),
-    ("Любовь к собственному благу производит в нас любовь к отечеству, а личное самолюбие – гордость народную, которая служит опорою патриотизма.", "Николай Карамзин"),
-    ("Любите искусство в себе, а не себя в искусстве.", "Константин Станиславский"),
-]
-
-
-def _pick_qotd() -> tuple[str, str]:
-    """Return a deterministic quote for today."""
-    seed = datetime.utcnow().strftime("%Y-%m-%d")
-    rng = random.Random(seed)
-    return rng.choice(_QOTD_LOCAL)
-
-async def qotd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send the quote of the day."""
-    quote, author = _pick_qotd()
-    await update.effective_message.reply_text(
-        f"💬 *Quote of the Day*\n\n“{quote}”\n— {author}",
-        parse_mode="Markdown"
-    )
 
 # --- Coin Flip ---
 async def coinflip(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1582,6 +1148,61 @@ async def secret_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not msg or not user:
         return
+async def secretme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /secretme your secret message
+    Creates a test secret addressed to yourself (for testing Reveal).
+    """
+    msg = update.effective_message
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if not msg or not user:
+        return
+
+    # Optional: keep it only for you
+    if user.id not in OWNER_IDS:
+        await msg.reply_text("🚫 This command is for the owner only.")
+        return
+
+    # Works best in groups/supergroups (so you can tap the inline button)
+    if chat and chat.type not in ("group", "supergroup"):
+        await msg.reply_text("🔐 /secretme is meant to be used in a group for testing.")
+        return
+
+    secret_text = " ".join(context.args or []).strip()
+    if not secret_text:
+        await msg.reply_text("❌ Usage: /secretme your secret message")
+        return
+
+    recipient_id = user.id
+    recipient_username = user.username or user.full_name or "you"
+    sender_name = user.full_name or user.username or "Someone"
+
+    # Create secret addressed to yourself (bypasses /secret self-block)
+    secret_id, truncated, needs_dm, token = create_secret(
+        recipient_id, secret_text, sender_name
+    )
+
+    buttons = [[InlineKeyboardButton("👀 Reveal", callback_data=f"sc|{secret_id}")]]
+
+    if needs_dm:
+        bot_username = (await context.bot.get_me()).username
+        deep_link = f"https://t.me/{bot_username}?start={secret_id}_{token}"
+        buttons.append([InlineKeyboardButton("✉️ Read in DM", url=deep_link)])
+
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    await msg.reply_text(
+        "🧪 🔐 Test secret for you — tap Reveal to check the popup",
+        reply_markup=keyboard
+    )
+
+    # Optional: delete the /secretme command message for privacy
+    try:
+        await msg.delete()
+    except Exception:
+        pass
     
     # Only works in groups
     if chat.type not in ("group", "supergroup"):
@@ -1699,7 +1320,7 @@ async def secret_reveal_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Check if tapper is the intended recipient
-    if q.from_user.id != secret_data["recipient_id"] and q.from_user.id not in OWNER_IDS:
+    if (q.from_user.id != secret_data["recipient_id"]) and (q.from_user.id not in OWNER_IDS):
         await q.answer("🚫 This secret isn't for you.", show_alert=True)
         return
     
@@ -3176,6 +2797,7 @@ def main():
     app.add_handler(CommandHandler("iftar", iftar_command))
     app.add_handler(CallbackQueryHandler(iftar_callback, pattern="^iftar_"))
     app.add_handler(CommandHandler("secret", secret_cmd))
+    app.add_handler(CommandHandler("secretme", secretme_cmd))
     app.add_handler(CallbackQueryHandler(secret_reveal_cb, pattern=r"^sc\|"))
     app.add_handler(CallbackQueryHandler(schedule_cb, pattern=r"^sch:"))
     app.add_handler(CallbackQueryHandler(button))
