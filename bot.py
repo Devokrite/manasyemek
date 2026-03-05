@@ -1699,7 +1699,7 @@ async def secret_reveal_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Check if tapper is the intended recipient
-    if q.from_user.id != secret_data["recipient_id"]:
+    if q.from_user.id != secret_data["recipient_id"] and q.from_user.id not in OWNER_IDS:
         await q.answer("🚫 This secret isn't for you.", show_alert=True)
         return
     
