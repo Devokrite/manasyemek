@@ -2798,7 +2798,6 @@ def main():
     app.add_handler(CommandHandler("secret", secret_cmd))
     app.add_handler(CommandHandler("secretme", secretme_cmd))
     app.add_handler(CallbackQueryHandler(secret_reveal_cb, pattern=r"^sc\|"))
-    app.add_handler(CallbackQueryHandler(schedule_cb, pattern=r"^sch:"))
     app.add_handler(CallbackQueryHandler(button))
 
     # =========================
