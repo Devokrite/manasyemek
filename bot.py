@@ -1299,8 +1299,7 @@ async def secretme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def secret_reveal_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
-
+   
     secret_id = q.data.split("|")[1]
     secret_data = _SECRET_STORE.get(secret_id)
 
