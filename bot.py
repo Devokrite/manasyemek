@@ -2774,7 +2774,6 @@ def main():
     app.add_handler(CommandHandler(["say", "echo"], say))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
-    app.add_handler(CommandHandler(["schedule", "sch"], schedule_cmd))
 
 
     # =========================
@@ -2809,7 +2808,6 @@ def main():
     # Add to existing /start handler or create new one:
     
     app.add_handler(CommandHandler("start", start_with_token))
-    app.add_handler(CommandHandler("qotd", qotd))
     app.add_handler(CommandHandler("coinflip", coinflip))
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("stickerquote", stickerquote))
