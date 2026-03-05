@@ -1326,32 +1326,33 @@ async def secret_reveal_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Reveal secret (ephemeral alert)
     # Reveal secret (ephemeral alert)
-    secret_text = secret_data["secret"]
-    sender_name = secret_data["sender_name"]
+# Reveal secret (ephemeral alert)
+secret_text = secret_data["secret"]
+sender_name = secret_data["sender_name"]
 
-    header = f"🔓 From {sender_name}:\n\n"
-    limit = 200  # Telegram popup limit (safe cap)
+header = f"🔓 From {sender_name}:\n\n"
+limit = 200  # Telegram popup limit (safe cap)
 
 # If you want a hint, keep it short
-    hint = "\n\n(Read in DM for full text)"  # keep tiny
+hint = "\n\n(Read in DM for full text)"  # keep tiny
+max_body = limit - len(header)
+
+if max_body < 0:
+    # super edge case: sender_name is insanely long
+    header = "🔓 Secret:\n\n"
     max_body = limit - len(header)
 
-     if max_body < 0:
-        # super edge case: sender_name is insanely long
-        header = "🔓 Secret:\n\n"
-        max_body = limit - len(header)
-
 # If message is too long, trim it and add a short hint (only if it fits)
-        body = secret_text
-    if len(body) > max_body:
+body = secret_text
+if len(body) > max_body:
     # reserve space for ellipsis + hint if possible
-        reserve = 1  # for "…"
-        if max_body >= (reserve + len(hint)):
+    reserve = 1  # for "…"
+    if max_body >= (reserve + len(hint)):
         body = body[: max_body - reserve - len(hint)] + "…" + hint
-        else:
+    else:
         body = body[: max(0, max_body - reserve)] + "…"
 
-    await q.answer(header + body, show_alert=True)
+await q.answer(header + body, show_alert=True)
 async def start_with_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle /start <token> for reading full secrets in DM.
