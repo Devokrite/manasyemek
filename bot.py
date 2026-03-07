@@ -3,6 +3,7 @@ import logging
 import re
 import time
 import os
+from google import genai
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
@@ -79,6 +80,7 @@ BASE_URL = "https://beslenme.manas.edu.kg"
 MENU_URL = f"{BASE_URL}/menu"
 BISHKEK_TZ = pytz_timezone("Asia/Bishkek")
 OWNER_IDS = {838410534}
+gemini_client = genai.Client()
 # ====== SCHEDULE (edit these as you like) ======
 # Keys must be Python weekday numbers: Monday=0 ... Sunday=6
 SCHEDULE: dict[int, list[str]] = {
@@ -1021,7 +1023,45 @@ def media_group_for(dishes: list[dict]):
     return media
 
 # ======================= ADDED COMMANDS 
+
+async def aihelp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    if not msg:
+        return
+
+    user_text = " ".join(context.args or []).strip()
+    if not user_text:
+        await msg.reply_text("Usage: /aihelp your question")
+        return
+
+    await msg.reply_text("🧠 Thinking...")
+
+    try:
+        prompt = (
+            "You are a helpful Telegram bot. "
+            "Explain the user's topic in a very simple, clear way, like they are 18 years old. "
+            "Keep it short, practical, and easy to understand. "
+            "Use plain English. Maximum 5 short sentences.\n\n"
+            f"Topic: {user_text}"
+        )
+
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+
+        text = response.text.strip() if response.text else "I couldn't explain that right now."
+        await msg.reply_text({text})
+
+    except Exception as e:
+        await msg.reply_text(f"❌ Gemini error: {e}")
+
+
+
+
+
 # ===================== QOTD(removed) & COINFLIP =====================
+
 import random
 from datetime import datetime
 from telegram import Update
@@ -2865,7 +2905,7 @@ def main():
     # =========================
 
     # Add to existing /start handler or create new one:
-    
+    app.add_handler(CommandHandler("aihelp", aihelp_cmd))
     app.add_handler(CommandHandler("start", start_with_token))
     app.add_handler(CommandHandler("coinflip", coinflip))
     app.add_handler(CommandHandler("predict", predict))
