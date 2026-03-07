@@ -1034,28 +1034,27 @@ async def aihelp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("Usage: /aihelp your question")
         return
 
-    await msg.reply_text("🧠 Thinking...")
+    wait_msg = await msg.reply_text("🧠 Thinking...")
 
     try:
         prompt = (
             "You are a helpful Telegram bot. "
-            "Explain the user's topic in a very simple, clear way, like they are 18 years old. "
-            "Keep it short, practical, and easy to understand. "
-            "Use plain English. Maximum 5 short sentences.\n\n"
+            "Explain the user's topic in very simple words, like they are 5 years old. "
+            "Keep it short, clear, and practical. "
+            "Maximum 5 short sentences.\n\n"
             f"Topic: {user_text}"
         )
 
         response = gemini_client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=prompt,
+            contents=prompt
         )
 
         text = response.text.strip() if response.text else "I couldn't explain that right now."
-        await msg.reply_text({text})
+        await wait_msg.edit_text(text)
 
     except Exception as e:
-        await msg.reply_text(f"❌ Gemini error: {e}")
-
+        await wait_msg.edit_text(f"❌ Gemini error: {e}")
 
 
 
