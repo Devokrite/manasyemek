@@ -80,7 +80,7 @@ BASE_URL = "https://beslenme.manas.edu.kg"
 MENU_URL = f"{BASE_URL}/menu"
 BISHKEK_TZ = pytz_timezone("Asia/Bishkek")
 OWNER_IDS = {838410534}
-gemini_client = genai.Client()
+gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 # ====== SCHEDULE (edit these as you like) ======
 # Keys must be Python weekday numbers: Monday=0 ... Sunday=6
 SCHEDULE: dict[int, list[str]] = {
