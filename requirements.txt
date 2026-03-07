@@ -8,3 +8,4 @@ deep-translator
 apscheduler
 pytz
 aiohttp
+google-genai
