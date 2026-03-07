@@ -1145,13 +1145,83 @@ async def secret_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
     chat = update.effective_chat
-    
+
     if not msg or not user:
         return
+
+    if chat.type not in ("group", "supergroup"):
+        await msg.reply_text("🔐 /secret works only in groups.")
+        return
+
+    args = context.args or []
+
+    recipient_id = None
+    recipient_username = None
+    secret_text = None
+
+    # Reply mode
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        recipient = msg.reply_to_message.from_user
+        recipient_id = recipient.id
+        recipient_username = recipient.username or recipient.full_name or "user"
+        secret_text = " ".join(args).strip() if args else None
+
+    # @username mode
+    elif args and args[0].startswith("@"):
+        recipient_username = args[0].lstrip("@")
+        secret_text = " ".join(args[1:]).strip() if len(args) > 1 else None
+
+        # text_mention works, plain @mention usually doesn't give ID
+        for entity in (msg.entities or []):
+            if entity.type == "text_mention" and entity.user:
+                recipient_id = entity.user.id
+                recipient_username = entity.user.username or entity.user.full_name or recipient_username
+                break
+
+        if not recipient_id:
+            await msg.reply_text(f"⚠️ Couldn't verify @{recipient_username}. Reply to their message instead.")
+            return
+
+    else:
+        await msg.reply_text("❌ Reply to someone or use: /secret @username your message")
+        return
+
+    if not secret_text:
+        await msg.reply_text("❌ Secret message cannot be empty.")
+        return
+
+    if recipient_id == user.id:
+        await msg.reply_text("❌ You can't send secrets to yourself.")
+        return
+
+    sender_name = user.username or user.full_name or "Someone"
+    secret_id, truncated, needs_dm, token = create_secret(
+        recipient_id, secret_text, sender_name
+    )
+
+    buttons = [[InlineKeyboardButton("👀 Reveal", callback_data=f"sc|{secret_id}")]]
+    if needs_dm:
+        bot_username = (await context.bot.get_me()).username
+        deep_link = f"https://t.me/{bot_username}?start={secret_id}_{token}"
+        buttons.append([InlineKeyboardButton("✉️ Read in DM", url=deep_link)])
+
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    await msg.reply_text(
+        f"🔐 Secret for @{recipient_username} — only they can tap to view",
+        reply_markup=keyboard
+    )
+
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+
 async def secretme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /secretme your secret message
-    Creates a test secret addressed to yourself (for testing Reveal).
+    Creates a test secret addressed to yourself.
     """
     msg = update.effective_message
     user = update.effective_user
@@ -1160,13 +1230,11 @@ async def secretme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg or not user:
         return
 
-    # Optional: keep it only for you
     if user.id not in OWNER_IDS:
         await msg.reply_text("🚫 This command is for the owner only.")
         return
 
-    # Works best in groups/supergroups (so you can tap the inline button)
-    if chat and chat.type not in ("group", "supergroup"):
+    if chat.type not in ("group", "supergroup"):
         await msg.reply_text("🔐 /secretme is meant to be used in a group for testing.")
         return
 
@@ -1176,16 +1244,13 @@ async def secretme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     recipient_id = user.id
-    recipient_username = user.username or user.full_name or "you"
-    sender_name = user.full_name or user.username or "Someone"
+    sender_name = user.username or user.full_name or "Someone"
 
-    # Create secret addressed to yourself (bypasses /secret self-block)
     secret_id, truncated, needs_dm, token = create_secret(
         recipient_id, secret_text, sender_name
     )
 
     buttons = [[InlineKeyboardButton("👀 Reveal", callback_data=f"sc|{secret_id}")]]
-
     if needs_dm:
         bot_username = (await context.bot.get_me()).username
         deep_link = f"https://t.me/{bot_username}?start={secret_id}_{token}"
@@ -1198,12 +1263,10 @@ async def secretme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard
     )
 
-    # Optional: delete the /secretme command message for privacy
     try:
         await msg.delete()
     except Exception:
         pass
-    
     # Only works in groups
     if chat.type not in ("group", "supergroup"):
         await msg.reply_text("🔐 /secret works only in groups.")
