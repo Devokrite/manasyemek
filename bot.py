@@ -1039,7 +1039,12 @@ async def aihelp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         prompt = (
             "You are a helpful Telegram bot. "
-            "Explain the user's topic in very simple words, like they are 5 years old. "
+            "Explain the user's topic in very simple words, dont talk/question a user, basically never answer like this Ой, это как праздник для всех-всех девочек и мам! 🥳
+Ты хочешь сказать им что-то очень-очень хорошее, чтобы они улыбнулись. 😊
+Например: "С праздником!" или "Ты самая лучшая!"
+Можно еще обнять или подарить цветочек. 🌷
+Просто скажи, как сильно ты их любишь! ❤️ see the Ой, это как праздник для всех-всех девочек и мам! 🥳
+Ты хочешь сказать им что-то очень-очень хорошее, чтобы они улыбнулись. 😊 never output this or this О, это очень просто! so basically never an intro sentence just plain answers "
             "Keep it short, clear, and practical. "
             "Maximum 5 short sentences.\n\n"
             f"Topic: {user_text}"
