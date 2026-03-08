@@ -2942,6 +2942,7 @@ def main():
         MessageHandler(
             filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
             ask_on_reply
+        )
     )
     app.add_handler(CommandHandler("ask", ask_cmd))
     app.add_handler(CommandHandler("start", start_with_token))
