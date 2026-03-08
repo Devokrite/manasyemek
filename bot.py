@@ -2909,7 +2909,7 @@ def main():
     app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND
+            filters.TEXT & ~filters.COMMAND,
             ask_on_reply
         )
     )
