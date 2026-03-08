@@ -1063,6 +1063,34 @@ User question/order:
     except Exception as e:
         await wait_msg.edit_text(f"❌ AI error: {e}")
 
+async def ask_on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    if not msg or not msg.text:
+        return
+
+    # Check if user replied to the bot
+    if not msg.reply_to_message:
+        return
+
+    if not msg.reply_to_message.from_user:
+        return
+
+    bot_id = context.bot.id
+
+    if msg.reply_to_message.from_user.id != bot_id:
+        return
+
+    user_text = msg.text.strip()
+
+    wait_msg = await msg.reply_text("🤖 Thinking...")
+
+    try:
+        answer = await ask_gemini_text(user_text)
+        await wait_msg.edit_text(answer)
+
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ AI error: {e}")
+
 
 
 # ===================== QOTD(removed) & COINFLIP =====================
@@ -2910,6 +2938,11 @@ def main():
     # =========================
 
     # Add to existing /start handler or create new one:
+    app.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+        ask_on_reply
+    )
     app.add_handler(CommandHandler("ask", ask_cmd))
     app.add_handler(CommandHandler("start", start_with_token))
     app.add_handler(CommandHandler("coinflip", coinflip))
