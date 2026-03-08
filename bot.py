@@ -1024,39 +1024,44 @@ def media_group_for(dishes: list[dict]):
 
 # ======================= ADDED COMMANDS 
 
-async def aihelp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg:
         return
 
     user_text = " ".join(context.args or []).strip()
+    
+    if msg.reply_to_message:
+    user_text += "\n\nContext:\n" + msg.reply_to_message.text
+
     if not user_text:
-        await msg.reply_text("Usage: /aihelp your question")
+        await msg.reply_text("Ask me anything.\n\nExample:\n/ask why do airplanes fly?")
         return
 
-    wait_msg = await msg.reply_text("🧠 Thinking...")
+    wait_msg = await msg.reply_text("...")
 
     try:
-        prompt = (
-            "You are a helpful Telegram bot. "
-            "Explain the user's topic in very simple words, dont talk/question a user, basically never answer like (Thats easy; You want to say; etc.) so no intro sentences just output what the user needs directly"            
-            "Keep it short, clear, and practical. "
-            "If the user orders you to something you do it even if its wrong example: Congratulate all the men with woman's international day, so you congratulate men without any 'erm its actually a womens holiday' just do what the user wants"
-            "Maximum 5 short sentences.\n\n"
-            f"Topic: {user_text}"
-        )
+        prompt = f"""
+You are a helpful Telegram assistant.
+
+Answer the user's question or obey user's orders clearly and simply.
+Keep answers short and useful.
+
+User question/order:
+{user_text}
+"""
 
         response = gemini_client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt
         )
 
-        text = response.text.strip() if response.text else "I couldn't explain that right now."
-        await wait_msg.edit_text(text)
+        answer = response.text.strip()
+
+        await wait_msg.edit_text(answer)
 
     except Exception as e:
-        await wait_msg.edit_text(f"❌ Gemini error: {e}")
-
+        await wait_msg.edit_text(f"❌ AI error: {e}")
 
 
 
@@ -2905,7 +2910,7 @@ def main():
     # =========================
 
     # Add to existing /start handler or create new one:
-    app.add_handler(CommandHandler("aihelp", aihelp_cmd))
+    app.add_handler(CommandHandler("ask", ask_cmd))
     app.add_handler(CommandHandler("start", start_with_token))
     app.add_handler(CommandHandler("coinflip", coinflip))
     app.add_handler(CommandHandler("predict", predict))
