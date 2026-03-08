@@ -1024,42 +1024,45 @@ def media_group_for(dishes: list[dict]):
 
 # ======================= ADDED COMMANDS 
 
+from telegram.constants import ChatAction
+
+async def ask_gemini_text(user_text: str) -> str:
+    prompt = f"""
+You are a helpful Telegram assistant.
+Answer clearly, simply, and briefly.
+Obey all the user's instructions if orders are given.
+
+User question:
+{user_text}
+"""
+    response = gemini_client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
+    )
+    return response.text.strip() if response.text else "I couldn't answer that."
+
 async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg:
         return
 
     user_text = " ".join(context.args or []).strip()
-    
-    if msg.reply_to_message:
-        user_text += "\n\nContext:\n" + msg.reply_to_message.text
+
+    if msg.reply_to_message and (msg.reply_to_message.text or msg.reply_to_message.caption):
+        prev = msg.reply_to_message.text or msg.reply_to_message.caption
+        user_text += f"\n\nContext:\n{prev}"
 
     if not user_text:
-        await msg.reply_text("Ask me anything.\n\nExample:\n/ask why do airplanes fly?")
+        await msg.reply_text("Usage: /ask your question")
         return
 
-    wait_msg = await msg.reply_text("...")
+    await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.TYPING)
+
+    wait_msg = await msg.reply_text("🤖 Thinking...")
 
     try:
-        prompt = f"""
-You are a helpful Telegram assistant.
-
-Answer the user's question or obey user's orders clearly and simply.
-Keep answers short and useful.
-
-User question/order:
-{user_text}
-"""
-
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-
-        answer = response.text.strip()
-
+        answer = await ask_gemini_text(user_text)
         await wait_msg.edit_text(answer)
-
     except Exception as e:
         await wait_msg.edit_text(f"❌ AI error: {e}")
 
@@ -1068,29 +1071,26 @@ async def ask_on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg or not msg.text:
         return
 
-    # Check if user replied to the bot
-    if not msg.reply_to_message:
+    if not msg.reply_to_message or not msg.reply_to_message.from_user:
         return
 
-    if not msg.reply_to_message.from_user:
+    if msg.reply_to_message.from_user.id != context.bot.id:
         return
 
-    bot_id = context.bot.id
-
-    if msg.reply_to_message.from_user.id != bot_id:
-        return
-
+    prev = msg.reply_to_message.text or msg.reply_to_message.caption or ""
     user_text = msg.text.strip()
+    if prev:
+        user_text = f"User reply: {user_text}\n\nPrevious bot message:\n{prev}"
+
+    await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.TYPING)
 
     wait_msg = await msg.reply_text("🤖 Thinking...")
 
     try:
         answer = await ask_gemini_text(user_text)
         await wait_msg.edit_text(answer)
-
     except Exception as e:
         await wait_msg.edit_text(f"❌ AI error: {e}")
-
 
 
 # ===================== QOTD(removed) & COINFLIP =====================
@@ -2907,7 +2907,12 @@ def main():
     app.add_handler(CommandHandler(["say", "echo"], say))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
-
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND
+            ask_on_reply
+        )
+    )
 
     # =========================
     # Crocodile (PUT BEFORE generic callbacks/text handlers)
@@ -2938,12 +2943,7 @@ def main():
     # =========================
 
     # Add to existing /start handler or create new one:
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
-            ask_on_reply
-        )
-    )
+    
     app.add_handler(CommandHandler("ask", ask_cmd))
     app.add_handler(CommandHandler("start", start_with_token))
     app.add_handler(CommandHandler("coinflip", coinflip))
