@@ -28,7 +28,7 @@ from telegram import (
     InputMediaPhoto,
     ChatPermissions,
 )
-from telegram.constants import ParseMode, ChatType
+from telegram.constants import ParseMode, ChatType, ChatAction
 from telegram.error import BadRequest
 from telegram.helpers import mention_html
 from telegram.ext import (
@@ -1048,24 +1048,44 @@ async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_text = " ".join(context.args or []).strip()
 
+    # If /ask is used as a reply, include replied message as context
     if msg.reply_to_message and (msg.reply_to_message.text or msg.reply_to_message.caption):
-        prev = msg.reply_to_message.text or msg.reply_to_message.caption
-        user_text += f"\n\nContext:\n{prev}"
+        replied_text = msg.reply_to_message.text or msg.reply_to_message.caption
+
+        if user_text:
+            user_text = f"{user_text}\n\nContext:\n{replied_text}"
+        else:
+            user_text = f"Please help with this message:\n\n{replied_text}"
 
     if not user_text:
-        await msg.reply_text("Usage: /ask your question")
+        await msg.reply_text("Ask me anything.\n\nExample:\n/ask why do airplanes fly?")
         return
 
     await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.TYPING)
-
-    wait_msg = await msg.reply_text("🤖 Thinking...")
+    wait_msg = await msg.reply_text("...")
 
     try:
-        answer = await ask_gemini_text(user_text)
+        prompt = f"""
+You are a helpful Telegram assistant.
+
+Answer the user's question or follow the user's instruction clearly and simply.
+Keep answers short, useful, and easy to understand.
+
+User input:
+{user_text}
+"""
+
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+
+        answer = response.text.strip() if response.text else "I couldn't answer that."
         await wait_msg.edit_text(answer)
+
     except Exception as e:
         await wait_msg.edit_text(f"❌ AI error: {e}")
-
+        
 async def ask_on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not msg.text:
@@ -1074,21 +1094,40 @@ async def ask_on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg.reply_to_message or not msg.reply_to_message.from_user:
         return
 
+    # Only react when replying to the bot
     if msg.reply_to_message.from_user.id != context.bot.id:
         return
 
-    prev = msg.reply_to_message.text or msg.reply_to_message.caption or ""
-    user_text = msg.text.strip()
-    if prev:
-        user_text = f"User reply: {user_text}\n\nPrevious bot message:\n{prev}"
+    prev_bot_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
+    user_reply = msg.text.strip()
+
+    if prev_bot_text:
+        user_text = f"User reply: {user_reply}\n\nPrevious bot message:\n{prev_bot_text}"
+    else:
+        user_text = user_reply
 
     await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.TYPING)
-
-    wait_msg = await msg.reply_text("🤖 Thinking...")
+    wait_msg = await msg.reply_text("...")
 
     try:
-        answer = await ask_gemini_text(user_text)
+        prompt = f"""
+You are a helpful Telegram assistant.
+
+The user is replying to your previous message.
+Continue the conversation naturally and helpfully.
+Keep answers short, useful, and easy to understand.
+
+{user_text}
+"""
+
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+
+        answer = response.text.strip() if response.text else "I couldn't answer that."
         await wait_msg.edit_text(answer)
+
     except Exception as e:
         await wait_msg.edit_text(f"❌ AI error: {e}")
 
