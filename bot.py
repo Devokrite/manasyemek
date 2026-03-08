@@ -1032,7 +1032,7 @@ async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = " ".join(context.args or []).strip()
     
     if msg.reply_to_message:
-    user_text += "\n\nContext:\n" + msg.reply_to_message.text
+        user_text += "\n\nContext:\n" + msg.reply_to_message.text
 
     if not user_text:
         await msg.reply_text("Ask me anything.\n\nExample:\n/ask why do airplanes fly?")
