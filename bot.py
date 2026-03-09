@@ -1131,7 +1131,67 @@ Keep answers short, useful, and easy to understand.
     except Exception as e:
         await wait_msg.edit_text(f"❌ AI error: {e}")
 
+async def ask_on_trigger(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    if not msg or not msg.text:
+        return
 
+    text = msg.text.strip()
+    lowered = text.lower()
+
+    triggers = ["бот,", "лп,", "ии,", "ai,", "ботяра,"]
+    matched_trigger = None
+
+    for trigger in triggers:
+        if lowered.startswith(trigger):
+            matched_trigger = trigger
+            break
+
+    if not matched_trigger:
+        return
+
+    user_text = text[len(matched_trigger):].strip()
+
+    # if user only wrote "бот," with nothing else
+    if not user_text:
+        await msg.reply_text("че")
+        return
+
+    # if this trigger message is itself a reply to someone, include context
+    if msg.reply_to_message and (msg.reply_to_message.text or msg.reply_to_message.caption):
+        replied_text = msg.reply_to_message.text or msg.reply_to_message.caption
+        user_text = f"{user_text}\n\nContext:\n{replied_text}"
+
+    try:
+        await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.TYPING)
+    except TimedOut:
+        pass
+    except Exception:
+        pass
+
+    wait_msg = await msg.reply_text("...")
+
+    try:
+        prompt = f"""
+You are a helpful Telegram assistant.
+
+Answer clearly, naturally, and usefully.
+Match the user's language.
+Keep answers concise unless more detail is needed.
+
+User input:
+{user_text}
+"""
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+
+        answer = response.text.strip() if response.text else "I couldn't answer that."
+        await wait_msg.edit_text(answer)
+
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ AI error: {e}")
 # ===================== QOTD(removed) & COINFLIP =====================
 
 import random
@@ -2946,10 +3006,19 @@ def main():
     app.add_handler(CommandHandler(["say", "echo"], say))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
+    app.add_handler(CommandHandler("ask", ask_cmd))
+
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             ask_on_reply
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            ask_on_trigger
         )
     )
 
